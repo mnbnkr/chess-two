@@ -39,13 +39,11 @@ class Pawn extends Piece {
     getPossibleMoves(gameState) {
         const moves = [];
         const attacks = [];
-        const dir = this.color === 'white' ? 1 : -1; // White starts at top (row 0) and moves down (positive dir)
-        const whiteStartRow = 1;
-        const blackStartRow = 8;
-
-        // My coordinate system has white on top (row 0, 1) and black on bottom (row 8, 9)
-        // Let's adjust rule interpretation to code: White pawns start on row 1, move to row 2,3,4...
-        // Black pawns start on row 8, move to row 7,6,5...
+        // FIX: Pawn direction is reversed to match board flip. White moves up (-1), Black moves down (+1).
+        const dir = this.color === 'white' ? -1 : 1;
+        // FIX: Start rows are swapped to match new board orientation.
+        const whiteStartRow = 8;
+        const blackStartRow = 1;
 
         // Standard 1-square move
         if (gameState.isValid(this.row + dir, this.col) && !gameState.getPiece(this.row + dir, this.col)) {
@@ -53,15 +51,17 @@ class Pawn extends Piece {
         }
         // Initial 2 or 3 square move
         if ((this.color === 'white' && this.row === whiteStartRow) || (this.color === 'black' && this.row === blackStartRow)) {
-            if (moves.length > 0 && !gameState.getPiece(this.row + 2 * dir, this.col)) {
+            // Check if first move is clear before allowing subsequent jumps
+            if (moves.length > 0 && gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
                 moves.push({ r: this.row + 2 * dir, c: this.col });
-                if (!gameState.getPiece(this.row + 3 * dir, this.col)) {
+                if (gameState.isValid(this.row + 3 * dir, this.col) && !gameState.getPiece(this.row + 3 * dir, this.col)) {
                     moves.push({ r: this.row + 3 * dir, c: this.col });
                 }
             }
         }
         // Standard captures
         [-1, 1].forEach(dCol => {
+            if (!gameState.isValid(this.row + dir, this.col + dCol)) return;
             const target = gameState.getPiece(this.row + dir, this.col + dCol);
             if (target && target.owner !== this.owner) {
                 attacks.push({ r: this.row + dir, c: this.col + dCol });
@@ -291,27 +291,31 @@ class Game {
         this.gameLoop();
     }
 
-    // Board Setup: White on top (rows 0,1), Black on bottom (rows 8,9)
-    // Rank 10 = row 0, Rank 1 = row 9
+    // FIX: Board setup flipped. Black is now at top (rows 0,1), White at bottom (rows 8,9).
+    // Life/Death pieces swapped to be on correct color squares.
     createInitialBoard() {
         const board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
         const backRank = ['Rook', 'Knight', 'Bishop', 'Queen', 'King', 'Bishop', 'Knight', 'Rook'];
 
-        // White pieces (Rank 10 & 9 -> rows 0 & 1)
-        board[0][0] = new Death('white', 0, 0, 'Death');
-        board[0][9] = new Life('white', 0, 9, 'Life');
+        // Black pieces (Top of board, rows 0 & 1)
+        // Rule: Black's Rank 1 is "Life, Rook... Death"
+        // (0,0) is a light square (for Life). (0,9) is a dark square (for Death). This is now correct.
+        board[0][0] = new Life('black', 0, 0, 'Life');
+        board[0][9] = new Death('black', 0, 9, 'Death');
         backRank.forEach((type, i) => {
-            board[0][i + 1] = new (this.getPieceClass(type))('white', 0, i + 1, type);
+            board[0][i + 1] = new (this.getPieceClass(type))('black', 0, i + 1, type);
         });
-        for (let c = 0; c < 10; c++) board[1][c] = new Pawn('white', 1, c, 'Pawn');
+        for (let c = 0; c < 10; c++) board[1][c] = new Pawn('black', 1, c, 'Pawn');
 
-        // Black pieces (Rank 1 & 2 -> rows 9 & 8)
-        board[9][0] = new Life('black', 9, 0, 'Life');
-        board[9][9] = new Death('black', 9, 9, 'Death');
+        // White pieces (Bottom of board, rows 9 & 8)
+        // Rule: White's Rank 10 is "Death, Rook... Life"
+        // (9,0) is a dark square (for Death). (9,9) is a light square (for Life). This is now correct.
+        board[9][0] = new Death('white', 9, 0, 'Death');
+        board[9][9] = new Life('white', 9, 9, 'Life');
         backRank.forEach((type, i) => {
-            board[9][i + 1] = new (this.getPieceClass(type))('black', 9, i + 1, type);
+            board[9][i + 1] = new (this.getPieceClass(type))('white', 9, i + 1, type);
         });
-        for (let c = 0; c < 10; c++) board[8][c] = new Pawn('black', 8, c, 'Pawn');
+        for (let c = 0; c < 10; c++) board[8][c] = new Pawn('white', 8, c, 'Pawn');
 
         return board;
     }
@@ -715,7 +719,9 @@ class InputHandler {
     constructor(game) {
         this.game = game;
         this.game.renderer.boardEl.addEventListener('click', (e) => {
-            const square = e.target.closest('.square, .valid-staging, .valid-resting');
+            // FIX: The selector is changed to always find the parent .square.
+            // This prevents errors when clicking on pieces or highlight overlays.
+            const square = e.target.closest('.square');
             if (square) {
                 const r = parseInt(square.dataset.r);
                 const c = parseInt(square.dataset.c);

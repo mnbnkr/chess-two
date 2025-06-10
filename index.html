@@ -1,0 +1,33 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+    <title>Chess Two</title>
+    <link rel="stylesheet"
+          href="style.css">
+</head>
+
+<body>
+    <div id="game-container">
+        <div id="ui-panel">
+            <h1>Chess Two</h1>
+            <div id="status-panel">
+                <p>Turn: <span id="player-turn">White</span></p>
+                <p id="move-status">Standard Move: Available | Special Move: Available</p>
+                <p id="phase-info">Select a piece to move.</p>
+            </div>
+            <button id="end-turn-btn">End Turn</button>
+        </div>
+        <div id="board-container">
+            <div id="game-board"></div>
+        </div>
+    </div>
+    <script type="module"
+            src="game.js"></script>
+</body>
+
+</html>

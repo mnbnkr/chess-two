@@ -21,19 +21,13 @@ class Piece {
         return PIECE_SYMBOLS[this.color][this.type];
     }
 
-    // FIX: Rewritten for correctness and simplicity based on game rules.
-    // The previous logic was flawed and caused the selection bugs.
     get owner() {
         if (this.type === 'Life' || this.type === 'Death') {
-            // Control is purely positional, per the rules.
-            // Black's half (Ranks 1-5) is rows 0-4. White's half (Ranks 6-10) is rows 5-9.
             return this.row >= 5 ? 'white' : 'black';
         }
-        // For all other pieces, the owner is always their base color.
         return this.color;
     }
 
-    // To be implemented by subclasses
     getPossibleMoves(gameState) {
         return { moves: [], attacks: [], specialActions: [] };
     }
@@ -47,13 +41,10 @@ class Pawn extends Piece {
         const whiteStartRow = 8;
         const blackStartRow = 1;
 
-        // Standard 1-square move
         if (gameState.isValid(this.row + dir, this.col) && !gameState.getPiece(this.row + dir, this.col)) {
             moves.push({ r: this.row + dir, c: this.col });
         }
-        // Initial 2 or 3 square move
         if ((this.color === 'white' && this.row === whiteStartRow) || (this.color === 'black' && this.row === blackStartRow)) {
-            // FIX: Added gameState.isValid checks for robustness before checking for pieces.
             if (moves.length > 0 && gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
                 moves.push({ r: this.row + 2 * dir, c: this.col });
                 if (gameState.isValid(this.row + 3 * dir, this.col) && !gameState.getPiece(this.row + 3 * dir, this.col)) {
@@ -61,7 +52,6 @@ class Pawn extends Piece {
                 }
             }
         }
-        // Standard captures
         [-1, 1].forEach(dCol => {
             if (!gameState.isValid(this.row + dir, this.col + dCol)) return;
             const target = gameState.getPiece(this.row + dir, this.col + dCol);
@@ -70,7 +60,6 @@ class Pawn extends Piece {
             }
         });
 
-        // Special Jump over Life/Death
         const blockingPiece = gameState.getPiece(this.row + dir, this.col);
         if (blockingPiece && (blockingPiece.type === 'Life' || blockingPiece.type === 'Death') && blockingPiece.owner !== this.owner) {
             if (gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
@@ -98,7 +87,7 @@ class Rook extends Piece {
                 const piece = gameState.getPiece(r, c);
                 if (piece) {
                     if (piece.type === 'Life' || piece.type === 'Death') {
-                        continue; // Can pass through
+                        continue;
                     }
                     if (piece.owner !== this.owner) {
                         attacks.push({ r, c });
@@ -206,6 +195,7 @@ class Life extends Piece {
             const c = this.col + dc;
             if (gameState.isValid(r, c) && (r + c) % 2 === 0) {
                 const target = gameState.getPiece(r, c);
+                // Can heal friendly pieces without a shield.
                 if (target && target.owner === this.owner && !target.hasShield) {
                     specialActions.push({ r, c, type: 'heal' });
                 }
@@ -235,6 +225,7 @@ class Death extends Piece {
             const c = this.col + dc;
             if (gameState.isValid(r, c) && (r + c) % 2 !== 0) {
                 const target = gameState.getPiece(r, c);
+                // Can kill any unprotected piece (friend or foe)
                 if (target && !this._isProtected(target, gameState)) {
                     specialActions.push({ r, c, type: 'kill' });
                 }
@@ -245,14 +236,17 @@ class Death extends Piece {
 
     _isProtected(piece, gameState) {
         const { row, col } = piece;
+        // Per the rule, protection is only provided by allied pieces on adjacent
+        // horizontal or vertical squares.
         const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
         for (const [dr, dc] of directions) {
             const protector = gameState.getPiece(row + dr, col + dc);
+            // Check if a piece exists, belongs to the same owner, and isn't the piece itself.
             if (protector && protector.owner === piece.owner && protector !== piece) {
-                return true;
+                return true; // The piece is protected.
             }
         }
-        return false;
+        return false; // The piece is not protected.
     }
 }
 
@@ -266,9 +260,9 @@ class Renderer {
         this.phaseInfoEl = statusPanel.querySelector('#phase-info');
     }
 
-    render(gameState) {
+    render(gameState, game) {
         this.boardEl.innerHTML = '';
-        const { getPiece } = gameState; // Use the attached helper
+        const { getPiece } = gameState;
 
         for (let r = 0; r < BOARD_SIZE; r++) {
             for (let c = 0; c < BOARD_SIZE; c++) {
@@ -276,7 +270,6 @@ class Renderer {
                 square.dataset.r = r;
                 square.dataset.c = c;
                 square.classList.add('square');
-                // A10 (row 0, col 0) is light.
                 square.classList.add((r + c) % 2 === 0 ? 'light' : 'dark');
 
                 const piece = getPiece(r, c);
@@ -294,7 +287,7 @@ class Renderer {
                 this.boardEl.appendChild(square);
             }
         }
-        this.updateStatus(gameState);
+        this.updateStatus(gameState, game);
     }
 
     createHighlightOverlay(r, c, gameState) {
@@ -327,11 +320,18 @@ class Renderer {
         return highlighted ? overlay : null;
     }
 
-    updateStatus(gameState) {
+    updateStatus(gameState, game) {
         this.playerTurnEl.textContent = gameState.currentPlayer.charAt(0).toUpperCase() + gameState.currentPlayer.slice(1);
         this.playerTurnEl.className = gameState.currentPlayer;
         const stdMove = gameState.turn.standardMoveMade ? 'Used' : 'Available';
-        const spcMove = gameState.turn.specialMoveMade ? 'Used' : 'Available';
+
+        let spcMove = 'Unavailable';
+        if (!gameState.turn.specialMoveMade && game.canPlayerMakeSpecialMove()) {
+            spcMove = 'Available';
+        } else if (gameState.turn.specialMoveMade) {
+            spcMove = 'Used';
+        }
+
         this.moveStatusEl.textContent = `Standard Move: ${stdMove} | Special Move: ${spcMove}`;
         this.phaseInfoEl.textContent = gameState.phaseInfo || ' ';
     }
@@ -360,7 +360,7 @@ class Game {
         this.gameState = {
             board: this.createInitialBoard(),
             currentPlayer: 'white',
-            phase: 'SELECT_PIECE', // SELECT_PIECE, SELECT_TARGET, SELECT_STAGING, SELECT_RESTING
+            phase: 'SELECT_PIECE',
             selectedPiece: null,
             validMoves: [],
             validAttacks: [],
@@ -375,7 +375,7 @@ class Game {
             },
         };
         this.gameState.getPiece = (r, c) => {
-            if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return null;
+            if (!this.gameState.isValid(r, c)) return null;
             return this.gameState.board[r]?.[c] ?? null;
         };
         this.gameState.isValid = (r, c) => {
@@ -387,14 +387,13 @@ class Game {
         this.endTurnButton = document.getElementById('end-turn-btn');
         this.endTurnButton.addEventListener('click', () => this.endTurn());
 
-        this.gameLoop();
+        this.renderer.render(this.gameState, this);
     }
 
     createInitialBoard() {
         const board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
         const backRank = ['Rook', 'Knight', 'Bishop', 'Queen', 'King', 'Bishop', 'Knight', 'Rook'];
 
-        // Black pieces (Top of board, rows 0 & 1)
         board[0][0] = new Life('black', 0, 0, 'Life');
         board[0][9] = new Death('black', 0, 9, 'Death');
         backRank.forEach((type, i) => {
@@ -402,7 +401,6 @@ class Game {
         });
         for (let c = 0; c < 10; c++) board[1][c] = new Pawn('black', 1, c, 'Pawn');
 
-        // White pieces (Bottom of board, rows 9 & 8)
         board[9][0] = new Death('white', 9, 0, 'Death');
         board[9][9] = new Life('white', 9, 9, 'Life');
         backRank.forEach((type, i) => {
@@ -417,11 +415,6 @@ class Game {
         return { Pawn, Rook, Knight, Bishop, Queen, King, Life, Death }[type] || Piece;
     }
 
-    gameLoop() {
-        this.renderer.render(this.gameState);
-        requestAnimationFrame(() => this.gameLoop());
-    }
-
     handleSquareClick(r, c) {
         const { phase } = this.gameState;
 
@@ -432,6 +425,7 @@ class Game {
             case 'SELECT_RESTING': this.handleSelectResting(r, c); break;
         }
         this.updateEndTurnButton();
+        this.renderer.render(this.gameState, this);
     }
 
     handleSelectPiece(r, c) {
@@ -493,7 +487,6 @@ class Game {
         const { moves, attacks, specialActions } = piece.getPossibleMoves(this.gameState);
         this.gameState.validMoves = moves || [];
         this.gameState.validAttacks = attacks || [];
-        // Only show special actions if the standard move is available to be consumed
         this.gameState.validSpecialActions = (specialActions && !this.gameState.turn.standardMoveMade) ? specialActions : [];
         this.gameState.phaseInfo = 'Select a destination, target, or special action.';
     }
@@ -612,14 +605,27 @@ class Game {
     }
 
     executeSpecialAction(piece, action) {
+        // A special action always consumes the standard move for the turn.
+        this.gameState.turn.standardMoveMade = true;
+
         if (action.type === 'heal') {
             const target = this.gameState.getPiece(action.r, action.c);
             if (target) target.hasShield = true;
+            // The Life piece itself doesn't move, so we pass 'false'
+            this.completeMove(piece, false);
         } else if (action.type === 'kill') {
-            this.gameState.board[action.r][action.c] = null;
+            // Death's Kill action moves the piece.
+            const fromR = piece.row;
+            const fromC = piece.col;
+            this.gameState.board[fromR][fromC] = null; // Vacate original square
+            this.gameState.board[action.r][action.c] = piece; // Move to target square
+            piece.row = action.r;
+            piece.col = action.c;
+            piece.hasMoved = true;
+            // The Death piece moved, but this is a special action consuming the *standard* move slot.
+            // We call completeMove to handle cleanup, but the turn state is already set.
+            this.completeMove(piece, false); // Pass 'false' to avoid it consuming the special move slot
         }
-        this.gameState.turn.standardMoveMade = true; // Consumes standard move
-        this.completeMove(piece, false); // `false` because the piece itself didn't move
     }
 
     completeMove(piece, movedPiece = true) {
@@ -627,6 +633,7 @@ class Game {
         if (isStandard) {
             this.gameState.turn.standardMoveMade = true;
         } else if (movedPiece) {
+            // This case handles a Life/Death piece's normal diagonal move
             this.gameState.turn.specialMoveMade = true;
         }
 
@@ -641,6 +648,22 @@ class Game {
         this.gameState.turn.specialMoveMade = false;
         this.deselect();
         this.updateEndTurnButton();
+        this.renderer.render(this.gameState, this);
+    }
+
+    canPlayerMakeSpecialMove() {
+        for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let c = 0; c < BOARD_SIZE; c++) {
+                const piece = this.gameState.getPiece(r, c);
+                if (piece && (piece.type === 'Life' || piece.type === 'Death') && piece.owner === this.gameState.currentPlayer) {
+                    const { moves, specialActions } = piece.getPossibleMoves(this.gameState);
+                    if (moves.length > 0) return true;
+                    // Special actions are only possible if the standard move is available.
+                    if (specialActions.length > 0 && !this.gameState.turn.standardMoveMade) return true;
+                }
+            }
+        }
+        return false;
     }
 
     updateEndTurnButton() {
@@ -688,14 +711,13 @@ class Game {
             }
         }
         toRemove.forEach(p => {
-            this.gameState.board[p.row][p.col] = null;
+            if (this.gameState.board[p.row][p.col]) {
+                this.gameState.board[p.row][p.col] = null;
+            }
         });
     }
 
     checkForCheck() {
-        // Simplified check, a full implementation is very complex.
-        // This version just finds the kings and checks if any opponent piece can attack their square.
-        // Then applies intimidation.
         ['white', 'black'].forEach(kingColor => {
             const king = this.findKing(kingColor);
             if (!king) return;
@@ -706,7 +728,6 @@ class Game {
                     if (piece && piece.owner !== kingColor) {
                         const { attacks } = piece.getPossibleMoves(this.gameState);
                         if (attacks.find(a => a.r === king.row && a.c === king.col)) {
-                            // This piece is checking the king. Apply Intimidation.
                             if (piece.hasShield) piece.hasShield = false;
                         }
                     }
@@ -725,7 +746,6 @@ class Game {
         return null;
     }
 }
-
 
 // --- INITIALIZE GAME --- //
 document.addEventListener('DOMContentLoaded', () => {

@@ -1,0 +1,17 @@
+{
+  "name": "chess-two",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bundle": "bun scripts/build-bundle.js",
+    "dev": "bun run bundle && bunx --bun vite --host 127.0.0.1",
+    "build": "bun run bundle && bunx --bun vite build",
+    "preview": "bunx --bun vite preview --host 127.0.0.1",
+    "test": "bun test",
+    "check": "bun test && bun run bundle && bunx --bun vite build"
+  },
+  "devDependencies": {
+    "vite": "^8.0.0"
+  }
+}

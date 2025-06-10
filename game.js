@@ -1,4 +1,3 @@
-/* game.js */
 // --- CONSTANTS AND CONFIG --- //
 const BOARD_SIZE = 10;
 const PIECE_SYMBOLS = {
@@ -44,7 +43,7 @@ class Pawn extends Piece {
         if (gameState.isValid(this.row + dir, this.col) && !gameState.getPiece(this.row + dir, this.col)) {
             moves.push({ r: this.row + dir, c: this.col });
         }
-        if ((this.color === 'white' && this.row === whiteStartRow) || (this.color === 'black' && this.row === blackStartRow)) {
+        if (!this.hasMoved && ((this.color === 'white' && this.row === whiteStartRow) || (this.color === 'black' && this.row === blackStartRow))) {
             if (moves.length > 0 && gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
                 moves.push({ r: this.row + 2 * dir, c: this.col });
                 if (gameState.isValid(this.row + 3 * dir, this.col) && !gameState.getPiece(this.row + 3 * dir, this.col)) {
@@ -256,7 +255,8 @@ class Renderer {
         this.boardEl = boardEl;
         this.statusPanel = statusPanel;
         this.playerTurnEl = statusPanel.querySelector('#player-turn');
-        this.moveStatusEl = statusPanel.querySelector('#move-status');
+        this.standardMoveStatusEl = statusPanel.querySelector('#standard-move-status');
+        this.specialMoveStatusEl = statusPanel.querySelector('#special-move-status');
         this.phaseInfoEl = statusPanel.querySelector('#phase-info');
     }
 
@@ -332,7 +332,8 @@ class Renderer {
             spcMove = 'Used';
         }
 
-        this.moveStatusEl.textContent = `Standard Move: ${stdMove} | Special Move: ${spcMove}`;
+        this.standardMoveStatusEl.textContent = stdMove;
+        this.specialMoveStatusEl.textContent = spcMove;
         this.phaseInfoEl.textContent = gameState.phaseInfo || ' ';
     }
 }
@@ -506,25 +507,25 @@ class Game {
     executeMove(piece, toR, toC, moveInfo) {
         const fromR = piece.row;
         const fromC = piece.col;
+        let destroyed = false;
 
-        this.checkPassThrough(piece, fromR, fromC, toR, toC);
-        if (moveInfo.isSpecialJump) {
+        // Handle pass-through for special pawn jump
+        if (moveInfo?.isSpecialJump) {
             const jumpedPiece = moveInfo.jumpedPiece;
-            if (jumpedPiece.type === 'Life') piece.hasShield = true;
-            if (jumpedPiece.type === 'Death') {
-                if (piece.hasShield) piece.hasShield = false;
-                else {
-                    this.gameState.board[fromR][fromC] = null;
-                    this.completeMove(piece);
-                    return;
-                }
-            }
+            destroyed = this.applyPassThroughEffect(piece, jumpedPiece);
+        } else {
+            // Handle pass-through for regular moves
+            destroyed = this.checkPassThrough(piece, fromR, fromC, toR, toC);
         }
 
-        this.gameState.board[toR][toC] = piece;
-        this.gameState.board[fromR][fromC] = null;
-        piece.row = toR;
-        piece.col = toC;
+        this.gameState.board[fromR][fromC] = null; // Always vacate origin
+
+        if (!destroyed) {
+            this.gameState.board[toR][toC] = piece;
+            piece.row = toR;
+            piece.col = toC;
+        }
+
         piece.hasMoved = true;
         this.completeMove(piece);
     }
@@ -538,6 +539,7 @@ class Game {
             this.gameState.phaseInfo = 'Select a staging square for the attack.';
         } else {
             this.gameState.phaseInfo = 'No valid staging squares for this attack.';
+            this.deselect();
         }
     }
 
@@ -558,10 +560,9 @@ class Game {
         const { moves } = attacker.getPossibleMoves(this.gameState);
         if (attacker.type === 'Knight') {
             const l_moves = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
-            const canLandOnTarget = l_moves.some(([dr, dc]) => attacker.row + dr === target.row && attacker.col + dc === target.col);
-            if (canLandOnTarget) {
-                staging = adjacentSquares.filter(adj => l_moves.some(([dr, dc]) => attacker.row + dr === adj.r && attacker.col + dc === adj.c));
-            }
+            staging = adjacentSquares.filter(adj => {
+                return l_moves.some(([dr, dc]) => attacker.row + dr === adj.r && attacker.col + dc === adj.c)
+            });
         } else {
             staging = adjacentSquares.filter(adj => moves.some(m => m.r === adj.r && m.c === adj.c));
         }
@@ -573,10 +574,16 @@ class Game {
         const fromR = attacker.row;
         const fromC = attacker.col;
 
-        this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
+        const destroyed = this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
+
+        this.gameState.board[fromR][fromC] = null; // Vacate origin
+
+        if (destroyed) { // Piece destroyed en route to staging square
+            this.completeMove(attacker);
+            return;
+        }
 
         this.gameState.board[stagingR][stagingC] = attacker;
-        this.gameState.board[fromR][fromC] = null;
         attacker.row = stagingR;
         attacker.col = stagingC;
         attacker.hasMoved = true;
@@ -668,25 +675,44 @@ class Game {
 
     updateEndTurnButton() {
         const { standardMoveMade, specialMoveMade } = this.gameState.turn;
-        this.endTurnButton.disabled = !(standardMoveMade || specialMoveMade);
+        const canMakeSpecial = this.canPlayerMakeSpecialMove();
+        this.endTurnButton.disabled = !(standardMoveMade && (specialMoveMade || !canMakeSpecial));
     }
 
     checkPassThrough(piece, r1, c1, r2, c2) {
+        // This check is only for straight-line moves. Knights/other complex movers don't pass through.
+        const isStraightLine = (r1 === r2 || c1 === c2 || Math.abs(r2 - r1) === Math.abs(c2 - c1));
+        if (!isStraightLine) return false;
+
         const dr = Math.sign(r2 - r1), dc = Math.sign(c2 - c1);
         let r = r1 + dr, c = c1 + dc;
+
         while (r !== r2 || c !== c2) {
             const p = this.gameState.getPiece(r, c);
-            if (p && (p.type === 'Life' || p.type === 'Death')) this.applyPassThroughEffect(piece, p);
+            if (p && (p.type === 'Life' || p.type === 'Death')) {
+                if (this.applyPassThroughEffect(piece, p)) {
+                    return true; // Piece was destroyed
+                }
+            }
             r += dr; c += dc;
         }
+        return false; // Piece survived
     }
 
     applyPassThroughEffect(movingPiece, staticPiece) {
-        if (staticPiece.type === 'Life') movingPiece.hasShield = true;
-        else if (staticPiece.type === 'Death') {
-            if (movingPiece.hasShield) movingPiece.hasShield = false;
-            else this.gameState.board[movingPiece.row][movingPiece.col] = null;
+        if (staticPiece.type === 'Life') {
+            movingPiece.hasShield = true;
+            return false; // Not destroyed
         }
+        else if (staticPiece.type === 'Death') {
+            if (movingPiece.hasShield) {
+                movingPiece.hasShield = false;
+                return false; // Not destroyed
+            } else {
+                return true; // Is destroyed
+            }
+        }
+        return false;
     }
 
     checkForAnnihilation() {

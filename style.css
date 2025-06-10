@@ -1,4 +1,3 @@
-/* style.css */
 :root {
     --board-size: 600px;
     --square-size: calc(var(--board-size) / 10);
@@ -46,6 +45,24 @@ body {
 #status-panel p {
     margin: 12px 0;
 }
+
+#player-turn {
+    font-weight: bold;
+    padding: 2px 8px;
+    border-radius: 4px;
+    transition: background-color 0.3s, color 0.3s;
+}
+
+#player-turn.white {
+    background-color: white;
+    color: black;
+}
+
+#player-turn.black {
+    background-color: black;
+    color: white;
+}
+
 
 #end-turn-btn {
     width: 100%;
@@ -132,7 +149,7 @@ body {
     width: 90%;
     height: 90%;
     border-radius: 50%;
-    box-shadow: 0 0 10px 3px rgba(0, 180, 255, 0.8);
+    box-shadow: inset 0 0 7px 2px rgba(0, 180, 255, 0.8), 0 0 6px 1px rgba(0, 150, 255, 0.5);
     pointer-events: none;
     z-index: 1;
 }

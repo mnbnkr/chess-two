@@ -21,26 +21,15 @@ class Piece {
         return PIECE_SYMBOLS[this.color][this.type];
     }
 
-    // FIX: The owner logic was flawed after flipping the board.
-    // This new logic correctly determines ownership based on piece color and territory.
+    // FIX: Rewritten for correctness and simplicity based on game rules.
+    // The previous logic was flawed and caused the selection bugs.
     get owner() {
         if (this.type === 'Life' || this.type === 'Death') {
-            const isWhitePiece = this.color === 'white';
-            // With a flipped board, black territory is the top half (rows 0-4).
-            const isOnBlackTerritory = this.row <= 4;
-            // White territory is the bottom half (rows 5-9).
-            const isOnWhiteTerritory = this.row >= 5;
-
-            // A white piece on black's territory is controlled by black
-            if (isWhitePiece && isOnBlackTerritory) {
-                return 'black';
-            }
-            // A black piece on white's territory is controlled by white
-            if (!isWhitePiece && isOnWhiteTerritory) {
-                return 'white';
-            }
+            // Control is purely positional, per the rules.
+            // Black's half (Ranks 1-5) is rows 0-4. White's half (Ranks 6-10) is rows 5-9.
+            return this.row >= 5 ? 'white' : 'black';
         }
-        // For all other pieces, or L/D pieces on their home turf, the owner is their color.
+        // For all other pieces, the owner is always their base color.
         return this.color;
     }
 
@@ -64,7 +53,7 @@ class Pawn extends Piece {
         }
         // Initial 2 or 3 square move
         if ((this.color === 'white' && this.row === whiteStartRow) || (this.color === 'black' && this.row === blackStartRow)) {
-            // Check if first move is clear before allowing subsequent jumps
+            // FIX: Added gameState.isValid checks for robustness before checking for pieces.
             if (moves.length > 0 && gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
                 moves.push({ r: this.row + 2 * dir, c: this.col });
                 if (gameState.isValid(this.row + 3 * dir, this.col) && !gameState.getPiece(this.row + 3 * dir, this.col)) {
@@ -287,7 +276,6 @@ class Game {
                 specialMoveMade: false
             },
         };
-        // *** FIX: Attach helper methods directly to gameState object for reliable access ***
         this.gameState.getPiece = (r, c) => {
             if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return null;
             return this.gameState.board[r]?.[c] ?? null;

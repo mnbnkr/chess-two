@@ -569,9 +569,64 @@ class Game {
         }
     }
 
-    checkForAnnihilation() { /* ... implementation unchanged ... */ }
-    checkForCheck() { /* ... implementation unchanged ... */ }
-    findKing(color) { /* ... implementation unchanged ... */ }
+    checkForAnnihilation() {
+        const lifeDeathPieces = [];
+        for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let c = 0; c < BOARD_SIZE; c++) {
+                const p = this.gameState.getPiece(r, c);
+                if (p && (p.type === 'Life' || p.type === 'Death')) {
+                    lifeDeathPieces.push(p);
+                }
+            }
+        }
+        const toRemove = new Set();
+        for (let i = 0; i < lifeDeathPieces.length; i++) {
+            for (let j = i + 1; j < lifeDeathPieces.length; j++) {
+                const p1 = lifeDeathPieces[i];
+                const p2 = lifeDeathPieces[j];
+                if (p1.type !== p2.type && Math.max(Math.abs(p1.row - p2.row), Math.abs(p1.col - p2.col)) === 1) {
+                    toRemove.add(p1);
+                    toRemove.add(p2);
+                }
+            }
+        }
+        toRemove.forEach(p => {
+            this.gameState.board[p.row][p.col] = null;
+        });
+    }
+
+    checkForCheck() {
+        // Simplified check, a full implementation is very complex.
+        // This version just finds the kings and checks if any opponent piece can attack their square.
+        // Then applies intimidation.
+        ['white', 'black'].forEach(kingColor => {
+            const king = this.findKing(kingColor);
+            if (!king) return;
+
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const piece = this.gameState.getPiece(r, c);
+                    if (piece && piece.owner !== kingColor) {
+                        const { attacks } = piece.getPossibleMoves(this.gameState);
+                        if (attacks.find(a => a.r === king.row && a.c === king.col)) {
+                            // This piece is checking the king. Apply Intimidation.
+                            if (piece.hasShield) piece.hasShield = false;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    findKing(color) {
+        for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let c = 0; c < BOARD_SIZE; c++) {
+                const p = this.gameState.getPiece(r, c);
+                if (p && p.type === 'King' && p.color === color) return p;
+            }
+        }
+        return null;
+    }
 }
 
 // --- RENDERER --- //

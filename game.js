@@ -256,6 +256,104 @@ class Death extends Piece {
     }
 }
 
+// --- RENDERER --- //
+class Renderer {
+    constructor(boardEl, statusPanel) {
+        this.boardEl = boardEl;
+        this.statusPanel = statusPanel;
+        this.playerTurnEl = statusPanel.querySelector('#player-turn');
+        this.moveStatusEl = statusPanel.querySelector('#move-status');
+        this.phaseInfoEl = statusPanel.querySelector('#phase-info');
+    }
+
+    render(gameState) {
+        this.boardEl.innerHTML = '';
+        const { getPiece } = gameState; // Use the attached helper
+
+        for (let r = 0; r < BOARD_SIZE; r++) {
+            for (let c = 0; c < BOARD_SIZE; c++) {
+                const square = document.createElement('div');
+                square.dataset.r = r;
+                square.dataset.c = c;
+                square.classList.add('square');
+                // A10 (row 0, col 0) is light.
+                square.classList.add((r + c) % 2 === 0 ? 'light' : 'dark');
+
+                const piece = getPiece(r, c);
+                if (piece) {
+                    const pieceEl = document.createElement('div');
+                    pieceEl.classList.add('piece', piece.color);
+                    if (piece.hasShield) pieceEl.classList.add('has-shield');
+                    pieceEl.textContent = piece.symbol;
+                    square.appendChild(pieceEl);
+                }
+
+                const overlay = this.createHighlightOverlay(r, c, gameState);
+                if (overlay) square.appendChild(overlay);
+
+                this.boardEl.appendChild(square);
+            }
+        }
+        this.updateStatus(gameState);
+    }
+
+    createHighlightOverlay(r, c, gameState) {
+        const overlay = document.createElement('div');
+        overlay.classList.add('highlight-overlay');
+        let highlighted = false;
+
+        if (gameState.selectedPiece?.row === r && gameState.selectedPiece?.col === c) {
+            overlay.classList.add('selected');
+            highlighted = true;
+        }
+        if (gameState.validMoves.some(m => m.r === r && m.c === c)) {
+            overlay.classList.add('valid-move');
+            highlighted = true;
+        }
+        if (gameState.validAttacks.some(a => a.r === r && a.c === c) ||
+            gameState.validSpecialActions.some(s => s.r === r && s.c === c)) {
+            overlay.classList.add('valid-attack');
+            highlighted = true;
+        }
+        if (gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
+            overlay.classList.add('valid-staging');
+            highlighted = true;
+        }
+        if (gameState.restingOptions.some(s => s.r === r && s.c === c)) {
+            overlay.classList.add('valid-resting');
+            highlighted = true;
+        }
+
+        return highlighted ? overlay : null;
+    }
+
+    updateStatus(gameState) {
+        this.playerTurnEl.textContent = gameState.currentPlayer.charAt(0).toUpperCase() + gameState.currentPlayer.slice(1);
+        this.playerTurnEl.className = gameState.currentPlayer;
+        const stdMove = gameState.turn.standardMoveMade ? 'Used' : 'Available';
+        const spcMove = gameState.turn.specialMoveMade ? 'Used' : 'Available';
+        this.moveStatusEl.textContent = `Standard Move: ${stdMove} | Special Move: ${spcMove}`;
+        this.phaseInfoEl.textContent = gameState.phaseInfo || ' ';
+    }
+}
+
+// --- INPUT HANDLER --- //
+class InputHandler {
+    constructor(game) {
+        this.game = game;
+        this.game.renderer.boardEl.addEventListener('click', (e) => {
+            const square = e.target.closest('.square');
+            if (square) {
+                const r = parseInt(square.dataset.r);
+                const c = parseInt(square.dataset.c);
+                if (!isNaN(r) && !isNaN(c)) {
+                    this.game.handleSquareClick(r, c);
+                }
+            }
+        });
+    }
+}
+
 // --- GAME LOGIC AND STATE --- //
 class Game {
     constructor() {
@@ -628,103 +726,6 @@ class Game {
     }
 }
 
-// --- RENDERER --- //
-class Renderer {
-    constructor(boardEl, statusPanel) {
-        this.boardEl = boardEl;
-        this.statusPanel = statusPanel;
-        this.playerTurnEl = statusPanel.querySelector('#player-turn');
-        this.moveStatusEl = statusPanel.querySelector('#move-status');
-        this.phaseInfoEl = statusPanel.querySelector('#phase-info');
-    }
-
-    render(gameState) {
-        this.boardEl.innerHTML = '';
-        const { getPiece } = gameState; // Use the attached helper
-
-        for (let r = 0; r < BOARD_SIZE; r++) {
-            for (let c = 0; c < BOARD_SIZE; c++) {
-                const square = document.createElement('div');
-                square.dataset.r = r;
-                square.dataset.c = c;
-                square.classList.add('square');
-                // A10 (row 0, col 0) is light.
-                square.classList.add((r + c) % 2 === 0 ? 'light' : 'dark');
-
-                const piece = getPiece(r, c);
-                if (piece) {
-                    const pieceEl = document.createElement('div');
-                    pieceEl.classList.add('piece', piece.color);
-                    if (piece.hasShield) pieceEl.classList.add('has-shield');
-                    pieceEl.textContent = piece.symbol;
-                    square.appendChild(pieceEl);
-                }
-
-                const overlay = this.createHighlightOverlay(r, c, gameState);
-                if (overlay) square.appendChild(overlay);
-
-                this.boardEl.appendChild(square);
-            }
-        }
-        this.updateStatus(gameState);
-    }
-
-    createHighlightOverlay(r, c, gameState) {
-        const overlay = document.createElement('div');
-        overlay.classList.add('highlight-overlay');
-        let highlighted = false;
-
-        if (gameState.selectedPiece?.row === r && gameState.selectedPiece?.col === c) {
-            overlay.classList.add('selected');
-            highlighted = true;
-        }
-        if (gameState.validMoves.some(m => m.r === r && m.c === c)) {
-            overlay.classList.add('valid-move');
-            highlighted = true;
-        }
-        if (gameState.validAttacks.some(a => a.r === r && a.c === c) ||
-            gameState.validSpecialActions.some(s => s.r === r && s.c === c)) {
-            overlay.classList.add('valid-attack');
-            highlighted = true;
-        }
-        if (gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
-            overlay.classList.add('valid-staging');
-            highlighted = true;
-        }
-        if (gameState.restingOptions.some(s => s.r === r && s.c === c)) {
-            overlay.classList.add('valid-resting');
-            highlighted = true;
-        }
-
-        return highlighted ? overlay : null;
-    }
-
-    updateStatus(gameState) {
-        this.playerTurnEl.textContent = gameState.currentPlayer.charAt(0).toUpperCase() + gameState.currentPlayer.slice(1);
-        this.playerTurnEl.className = gameState.currentPlayer;
-        const stdMove = gameState.turn.standardMoveMade ? 'Used' : 'Available';
-        const spcMove = gameState.turn.specialMoveMade ? 'Used' : 'Available';
-        this.moveStatusEl.textContent = `Standard Move: ${stdMove} | Special Move: ${spcMove}`;
-        this.phaseInfoEl.textContent = gameState.phaseInfo || ' ';
-    }
-}
-
-// --- INPUT HANDLER --- //
-class InputHandler {
-    constructor(game) {
-        this.game = game;
-        this.game.renderer.boardEl.addEventListener('click', (e) => {
-            const square = e.target.closest('.square');
-            if (square) {
-                const r = parseInt(square.dataset.r);
-                const c = parseInt(square.dataset.c);
-                if (!isNaN(r) && !isNaN(c)) {
-                    this.game.handleSquareClick(r, c);
-                }
-            }
-        });
-    }
-}
 
 // --- INITIALIZE GAME --- //
 document.addEventListener('DOMContentLoaded', () => {

@@ -1,22 +1,49 @@
 :root {
     --board-size: 600px;
     --square-size: calc(var(--board-size) / 10);
-    --light-square: #f0d9b5;
-    --dark-square: #b58863;
-    --highlight-select: rgba(255, 255, 0, 0.5);
-    --highlight-move: rgba(30, 150, 30, 0.5);
-    --highlight-attack: rgba(200, 30, 30, 0.6);
-    --highlight-special: rgba(30, 100, 200, 0.6);
+
+    /* Thematic Color Palette */
+    --bg-color: #1a1a1a;
+    --panel-bg: #2c2c2c;
+    --border-color: #000;
+    --text-color: #e0e0e0;
+    --text-muted: #9e9e9e;
+
+    --light-square: #c8bfa7;
+    --dark-square: #6d615b;
+
+    --life-color: #81c784;
+    --death-color: #9e9e9e;
+
+    --status-available: #81c784;
+    /* Soft Green */
+    --status-used: #e57373;
+    /* Soft Red */
+    --status-unavailable: #757575;
+    /* Mid Grey */
+
+    --highlight-select: rgba(135, 206, 250, 0.4);
+    /* Sky Blue */
+    --highlight-move: rgba(144, 238, 144, 0.5);
+    /* Light Green */
+    --highlight-attack: rgba(255, 160, 122, 0.6);
+    /* Light Salmon */
+    --highlight-special: rgba(173, 216, 230, 0.6);
+    /* Light Blue */
+
+    --font-main: 'Lato', sans-serif;
+    --font-display: 'Merriweather', serif;
 }
 
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: var(--font-main);
     display: flex;
     justify-content: center;
     align-items: center;
     min-height: 100vh;
-    background-color: #333;
-    color: #fff;
+    background-color: var(--bg-color);
+    background: radial-gradient(ellipse at center, #2a2a2a 0%, var(--bg-color) 70%);
+    color: var(--text-color);
     margin: 0;
 }
 
@@ -28,25 +55,64 @@ body {
 }
 
 #ui-panel {
-    width: 250px;
+    width: 280px;
     text-align: center;
-    background-color: #444;
+    background-color: var(--panel-bg);
     padding: 20px;
     border-radius: 8px;
     flex-shrink: 0;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+}
+
+#ui-panel h1 {
+    font-family: var(--font-display);
+    margin-top: 0;
+    margin-bottom: 25px;
+    font-weight: 700;
+    color: var(--text-color);
 }
 
 #status-panel {
-    background-color: #2a2a2a;
-    border-radius: 5px;
-    padding: 1px 15px;
-    margin-bottom: 20px;
     text-align: left;
 }
 
-#status-panel p {
+#turn-status-container p {
     margin: 12px 0;
+    font-size: 0.95em;
+    color: var(--text-muted);
 }
+
+#turn-status-container span {
+    font-weight: bold;
+}
+
+.status-available {
+    color: var(--status-available);
+}
+
+.status-used {
+    color: var(--status-used);
+}
+
+.status-unavailable {
+    color: var(--status-unavailable);
+}
+
+
+#info-box {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #444;
+}
+
+#info-box p {
+    margin: 0;
+    font-style: italic;
+    color: var(--text-muted);
+    min-height: 4em;
+    /* Reserve space to prevent layout shifts */
+}
+
 
 #player-turn {
     font-weight: bold;
@@ -56,7 +122,7 @@ body {
 }
 
 #player-turn.white {
-    background-color: white;
+    background-color: #f0f0f0;
     color: black;
 }
 
@@ -66,7 +132,8 @@ body {
 }
 
 #board-container {
-    border: 5px solid #222;
+    border: 5px solid var(--border-color);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
 }
 
 #game-board {
@@ -106,31 +173,29 @@ body {
     -webkit-user-select: none;
     -ms-user-select: none;
     user-select: none;
+    text-shadow: 0 0 3px rgba(0, 0, 0, 0.7);
 }
 
 .piece.white {
     color: #ffffff;
-    text-shadow: 0 0 5px #000, 0 0 5px #000;
 }
 
 .piece.black {
-    color: #111111;
+    color: #1a1a1a;
 }
 
 .piece.life-piece {
-    color: #00c853;
-    /* Material Green */
+    color: var(--life-color);
+    font-weight: bold;
 }
 
 .piece.death-piece {
-    color: #424242;
-    /* Dark Grey */
+    color: var(--death-color);
 }
 
 .piece.white.death-piece {
-    text-shadow: 0 0 4px #ccc;
+    text-shadow: 0 0 4px #fff;
 }
-
 
 .piece.has-shield::after {
     content: '';
@@ -196,11 +261,6 @@ body {
 @media screen and (max-width: 1024px) {
     :root {
         --board-size: min(90vw, 500px);
-    }
-
-    body {
-        height: auto;
-        align-items: initial;
     }
 
     #game-container {

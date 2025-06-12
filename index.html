@@ -6,6 +6,13 @@
     <meta name="viewport"
           content="width=device-width, initial-scale=1.0">
     <title>Chess Two</title>
+    <link rel="preconnect"
+          href="https://fonts.googleapis.com">
+    <link rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&family=Merriweather:wght@400;700&display=swap"
+          rel="stylesheet">
     <link rel="stylesheet"
           href="style.css">
 </head>
@@ -15,10 +22,14 @@
         <div id="ui-panel">
             <h1>Chess Two</h1>
             <div id="status-panel">
-                <p>Turn: <span id="player-turn">White</span></p>
-                <p>Standard Move: <span id="standard-move-status">Available</span></p>
-                <p>Special Move: <span id="special-move-status">Available</span></p>
-                <p id="phase-info">Select a piece to move.</p>
+                <div id="turn-status-container">
+                    <p>Turn: <span id="player-turn">White</span></p>
+                    <p>Standard Move: <span id="standard-move-status">Available</span></p>
+                    <p>Special Move: <span id="special-move-status">Available</span></p>
+                </div>
+                <div id="info-box">
+                    <p id="phase-info">White's turn. Select a piece to begin.</p>
+                </div>
             </div>
         </div>
         <div id="board-container">

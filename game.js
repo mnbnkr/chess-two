@@ -219,7 +219,7 @@ class Life extends Piece {
             const c = this.col + dc;
 
             // Check for valid, light-colored square
-            if (gameState.isValid(r, c) && (r + c) % 2 === 0) {
+            if (gameState.isValid(r, c) && (r + c) % 2 !== 0) {
                 // Normal move to empty square
                 if (!gameState.getPiece(r, c)) {
                     moves.push({ r, c });
@@ -244,7 +244,7 @@ class Death extends Piece {
             const r = this.row + dr;
             const c = this.col + dc;
             // Check for valid, dark-colored square
-            if (gameState.isValid(r, c) && (r + c) % 2 !== 0) {
+            if (gameState.isValid(r, c) && (r + c) % 2 === 0) {
                 // Normal move to empty square
                 if (!gameState.getPiece(r, c)) {
                     moves.push({ r, c });

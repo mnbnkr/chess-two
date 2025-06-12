@@ -294,7 +294,7 @@ class Renderer {
                 square.dataset.r = r;
                 square.dataset.c = c;
                 // Rule: A1(0,0) is light -> (r+c)%2===0 is LIGHT
-                square.classList.add('square', (r + c) % 2 === 0 ? 'light' : 'dark');
+                square.classList.add('square', (r + c) % 2 === 0 ? 'dark' : 'light');
 
                 const piece = getPiece(r, c);
                 if (piece) {

@@ -340,9 +340,6 @@ class InputHandler {
                 }
             }
         });
-        document.getElementById('end-turn-btn').addEventListener('click', () => {
-            this.game.endTurn();
-        });
     }
 }
 
@@ -402,48 +399,53 @@ class Game {
     handleSquareClick(r, c) {
         const { phase, selectedPiece } = this.gameState;
 
-        if (phase === 'SELECT_PIECE') {
-            const piece = this.gameState.getPiece(r, c);
-            if (piece && piece.owner === this.gameState.currentPlayer) {
-                this.selectPiece(piece);
+        switch (phase) {
+            case 'SELECT_PIECE': {
+                const piece = this.gameState.getPiece(r, c);
+                if (piece && piece.owner === this.gameState.currentPlayer) {
+                    this.selectPiece(piece);
+                }
+                break;
             }
-        } else if (phase === 'SELECT_TARGET') {
-            const clickedSamePiece = selectedPiece.row === r && selectedPiece.col === c;
-            const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
-            const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
-            const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
+            case 'SELECT_TARGET': {
+                const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
+                const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
+                const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
+                const clickedPiece = this.gameState.getPiece(r, c);
 
-            if (clickedSamePiece) {
-                this.deselect();
-            } else if (targetMove) {
-                this.executeMove(selectedPiece, r, c, targetMove);
-            } else if (targetAttack) {
-                this.initiateAttack(selectedPiece, this.gameState.getPiece(r, c));
-            } else if (targetSpecial) {
-                this.executeSpecialAction(selectedPiece, targetSpecial);
-            } else {
-                const otherPiece = this.gameState.getPiece(r, c);
-                if (otherPiece && otherPiece.owner === this.gameState.currentPlayer) {
-                    this.selectPiece(otherPiece);
+                if (targetMove) {
+                    this.executeMove(selectedPiece, r, c, targetMove);
+                } else if (targetAttack) {
+                    this.initiateAttack(selectedPiece, this.gameState.getPiece(r, c));
+                } else if (targetSpecial) {
+                    this.executeSpecialAction(selectedPiece, targetSpecial);
+                } else if (clickedPiece && clickedPiece.owner === this.gameState.currentPlayer) {
+                    this.selectPiece(clickedPiece);
                 } else {
                     this.deselect();
                 }
+                break;
             }
-        } else if (phase === 'SELECT_STAGING') {
-            if (this.gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
-                this.executeAttack(r, c);
-            } else {
-                this.deselect();
+            case 'SELECT_STAGING': {
+                if (this.gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
+                    this.executeAttack(r, c);
+                } else {
+                    this.deselect();
+                }
+                break;
             }
-        } else if (phase === 'SELECT_RESTING') {
-            if (this.gameState.restingOptions.some(s => s.r === r && s.c === c)) {
-                this.completeResting(r, c);
+            case 'SELECT_RESTING': {
+                if (this.gameState.restingOptions.some(s => s.r === r && s.c === c)) {
+                    this.completeResting(r, c);
+                }
+                // Intentionally do nothing on wrong click, force player to choose a resting spot.
+                break;
             }
         }
 
-        // Always re-render after a click to show updates
         this.renderer.render(this.gameState, this);
     }
+
 
     selectPiece(piece) {
         const isStandard = !['Life', 'Death'].includes(piece.type);
@@ -650,7 +652,6 @@ class Game {
         this.gameState.currentPlayer = this.gameState.currentPlayer === 'white' ? 'black' : 'white';
         this.gameState.turn = { standardMoveMade: false, specialMoveMade: false };
         this.deselect();
-        // The render call is handled by whatever called endTurn (button click or auto-end)
         this.renderer.render(this.gameState, this);
     }
 

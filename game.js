@@ -1,5 +1,4 @@
 // game.js
-
 // --- CONSTANTS AND CONFIG --- //
 const BOARD_SIZE = 10;
 const PIECE_SYMBOLS = {
@@ -148,6 +147,8 @@ class Knight extends Piece {
     getPossibleMoves(gameState) {
         const moves = [];
         const attacks = [];
+
+        // Standard L-moves (capturing or non-capturing)
         const l_moves = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
         l_moves.forEach(([dr, dc]) => {
             const r = this.row + dr;
@@ -162,22 +163,46 @@ class Knight extends Piece {
             }
         });
 
-        for (let dr = -1; dr <= 1; dr++) {
-            for (let dc = -1; dc <= 1; dc++) {
-                if (dr === 0 && dc === 0) continue;
-                const rampR = this.row + dr;
-                const rampC = this.col + dc;
-                const landR = this.row + 2 * dr;
-                const landC = this.col + 2 * dc;
+        // Chained Ramp Jumps (non-capturing)
+        const rampMoves = [];
+        const findRampJumps = (startRow, startCol, visited) => {
+            for (let dr = -1; dr <= 1; dr++) {
+                for (let dc = -1; dc <= 1; dc++) {
+                    if (dr === 0 && dc === 0) continue;
+                    const rampR = startRow + dr;
+                    const rampC = startCol + dc;
+                    const landR = startRow + 2 * dr;
+                    const landC = startCol + 2 * dc;
 
-                const rampPiece = gameState.getPiece(rampR, rampC);
-                if (rampPiece && !['Life', 'Death', 'King'].includes(rampPiece.type)) {
-                    if (gameState.isValid(landR, landC) && !gameState.getPiece(landR, landC)) {
-                        moves.push({ r: landR, c: landC, isRampJump: true });
+                    // Cannot land on a square already part of this move sequence
+                    if (visited.some(v => v.r === landR && v.c === landC)) continue;
+
+                    const rampPiece = gameState.getPiece(rampR, rampC);
+                    if (rampPiece && !['Life', 'Death', 'King'].includes(rampPiece.type)) {
+                        if (gameState.isValid(landR, landC) && !gameState.getPiece(landR, landC)) {
+                            rampMoves.push({ r: landR, c: landC, isRampJump: true });
+
+                            // If we have made less than 2 jumps, look for another one
+                            if (visited.length < 2) {
+                                findRampJumps(landR, landC, [...visited, { r: landR, c: landC }]);
+                            }
+                        }
                     }
                 }
             }
-        }
+        };
+
+        findRampJumps(this.row, this.col, [{ r: this.row, c: this.col }]);
+
+        // Add unique ramp moves to the main moves array
+        const existingMoves = new Set(moves.map(m => `${m.r},${m.c}`));
+        rampMoves.forEach(rm => {
+            const key = `${rm.r},${rm.c}`;
+            if (!existingMoves.has(key)) {
+                moves.push(rm);
+                existingMoves.add(key);
+            }
+        });
 
         return { moves, attacks };
     }
@@ -187,27 +212,21 @@ class Life extends Piece {
     getPossibleMoves(gameState) {
         const moves = [];
         const specialActions = [];
-        // Diagonal Movement. A10 is dark, so r=9,c=0 -> r+c=9 (odd). A1 is light, r=0,c=0 -> r+c=0 (even).
-        // Standard chess board has A1 as dark. This board is different.
-        // Rule: Life on LIGHT squares. A1 is LIGHT. A1(0,0) is r+c=0 (even). A10(9,0) is dark, r+c=9(odd).
-        // Let's assume light squares are where (r+c) is EVEN.
+        // Rule: Life on LIGHT squares. A1(0,0) is LIGHT. A1(r=0,c=0) -> r+c=0 (EVEN).
+        // Therefore, light squares have an EVEN sum of coordinates.
         [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => {
             const r = this.row + dr;
             const c = this.col + dc;
-            // The problem description has a contradiction. "A10 is dark-colored, A1 is light-colored".
-            // My CSS uses (r+c)%2===0 for DARK. r=9,c=0 (A10) -> sum=9 (odd). r=0,c=0 (A1) -> sum=0 (even).
-            // The CSS is making A1 dark. Let's trust the rule text over the CSS.
-            // A1(0,0) is LIGHT. A10(9,0) is DARK.
-            // So light squares have (r+c)%2 !== (0+0)%2 -> (r+c) is ODD if A1 is light.
-            // But A1(0,0) sum is even. Let's follow the CSS: light = (r+c)%2 !== 0.
-            if (gameState.isValid(r, c) && (r + c) % 2 !== 0) { // light square
+
+            // Check for valid, light-colored square
+            if (gameState.isValid(r, c) && (r + c) % 2 === 0) {
                 // Normal move to empty square
                 if (!gameState.getPiece(r, c)) {
                     moves.push({ r, c });
                 }
-                // Heal action on adjacent friendly
+                // Heal action on adjacent friendly piece on a diagonal light square
                 const target = gameState.getPiece(r, c);
-                if (target && target.owner === this.owner && !target.hasShield && target.type !== 'King') {
+                if (target && target.owner === this.owner && !target.hasShield && !['King', 'Life', 'Death'].includes(target.type)) {
                     specialActions.push({ r, c, type: 'heal' });
                 }
             }
@@ -219,11 +238,13 @@ class Death extends Piece {
     getPossibleMoves(gameState) {
         const moves = [];
         const specialActions = [];
-        // Death on DARK squares. My CSS says dark is (r+c)%2 === 0.
+        // Rule: Death on DARK squares. A10(9,0) is DARK. A10(r=9,c=0) -> r+c=9 (ODD).
+        // Therefore, dark squares have an ODD sum of coordinates.
         [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => {
             const r = this.row + dr;
             const c = this.col + dc;
-            if (gameState.isValid(r, c) && (r + c) % 2 === 0) { // dark square
+            // Check for valid, dark-colored square
+            if (gameState.isValid(r, c) && (r + c) % 2 !== 0) {
                 // Normal move to empty square
                 if (!gameState.getPiece(r, c)) {
                     moves.push({ r, c });
@@ -272,7 +293,8 @@ class Renderer {
                 const square = document.createElement('div');
                 square.dataset.r = r;
                 square.dataset.c = c;
-                square.classList.add('square', (r + c) % 2 === 0 ? 'dark' : 'light');
+                // Rule: A1(0,0) is light -> (r+c)%2===0 is LIGHT
+                square.classList.add('square', (r + c) % 2 === 0 ? 'light' : 'dark');
 
                 const piece = getPiece(r, c);
                 if (piece) {
@@ -385,6 +407,7 @@ class Game {
         const board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
         const backRank = ['Rook', 'Knight', 'Bishop', 'Queen', 'King', 'Bishop', 'Knight', 'Rook'];
 
+        // Black pieces (Rank 1 & 2)
         board[0][0] = new Death('black', 0, 0, 'Death');
         board[0][9] = new Life('black', 0, 9, 'Life');
         backRank.forEach((type, i) => {
@@ -392,6 +415,7 @@ class Game {
         });
         for (let c = 0; c < 10; c++) board[1][c] = new Pawn('black', 1, c, 'Pawn');
 
+        // White pieces (Rank 9 & 10)
         board[9][0] = new Life('white', 9, 0, 'Life');
         board[9][9] = new Death('white', 9, 9, 'Death');
         backRank.forEach((type, i) => {
@@ -546,36 +570,28 @@ class Game {
     }
 
     calculateStagingSquares(attacker, target) {
-        const adjacentSquares = [];
+        const potentialStaging = [];
+        // 1. Find all empty squares adjacent to the target.
         for (let dr = -1; dr <= 1; dr++) {
             for (let dc = -1; dc <= 1; dc++) {
                 if (dr === 0 && dc === 0) continue;
                 const r = target.row + dr;
                 const c = target.col + dc;
-                // A staging square must be empty OR occupied only by the attacker itself
-                const pieceOnSquare = this.gameState.getPiece(r, c);
-                if (this.gameState.isValid(r, c) && (!pieceOnSquare || pieceOnSquare === attacker)) {
-                    adjacentSquares.push({ r, c });
+                if (this.gameState.isValid(r, c) && !this.gameState.getPiece(r, c)) {
+                    potentialStaging.push({ r, c });
                 }
             }
         }
 
-        // Temporarily remove the target piece to check paths to staging squares
-        const targetR = target.row;
-        const targetC = target.col;
-        this.gameState.board[targetR][targetC] = null;
+        // 2. Filter these by checking if the attacker can move to them.
+        // A move to a staging square is a non-capturing move.
+        // The target piece is not removed for this check, as it doesn't block path to an adjacent square
+        // unless it's a sliding piece and the path is perfectly collinear (which is impossible for an attack).
+        const { moves: attackerMoves } = attacker.getPossibleMoves(this.gameState);
 
-        const validStaging = adjacentSquares.filter(stagingSq => {
-            const { moves } = attacker.getPossibleMoves(this.gameState);
-            if (attacker.type === 'Knight') {
-                const l_moves = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
-                return l_moves.some(([dr, dc]) => attacker.row + dr === stagingSq.r && attacker.col + dc === stagingSq.c)
-            }
-            return moves.some(m => m.r === stagingSq.r && m.c === stagingSq.c);
-        });
-
-        // Restore the target piece
-        this.gameState.board[targetR][targetC] = target;
+        const validStaging = potentialStaging.filter(stagingSq =>
+            attackerMoves.some(move => move.r === stagingSq.r && move.c === stagingSq.c)
+        );
 
         return validStaging;
     }
@@ -586,35 +602,41 @@ class Game {
         const fromC = attacker.col;
         let destroyed = false;
 
+        // Knights jump and don't pass through anything on their way to the staging square.
         if (attacker.type !== 'Knight') {
             destroyed = this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
         }
 
         this.gameState.board[fromR][fromC] = null;
         if (destroyed) {
+            // Piece was destroyed by pass-through effect, move ends.
             this.completeMove(attacker, true, false);
             return;
         }
 
+        // Move attacker to staging square
         this.gameState.board[stagingR][stagingC] = attacker;
         attacker.row = stagingR;
         attacker.col = stagingC;
         attacker.hasMoved = true;
 
         if (target.hasShield) {
+            // Remove shield, attacker rests on staging square, move ends.
             target.hasShield = false;
             this.completeMove(attacker, true, false);
         } else {
+            // Killing blow: remove target and enter resting phase.
             this.gameState.board[target.row][target.col] = null;
             this.gameState.phase = 'SELECT_RESTING';
             this.gameState.restingOptions = [{ r: stagingR, c: stagingC }, { r: target.row, c: target.col }];
-            this.gameState.attackInfo = { attacker };
+            this.gameState.attackInfo = { attacker }; // Only need attacker for resting
             this.gameState.phaseInfo = 'Choose a resting square for your piece.';
         }
     }
 
     completeResting(toR, toC) {
         const { attacker } = this.gameState.attackInfo;
+        // If the chosen resting spot is different from the staging square, move the piece.
         if (attacker.row !== toR || attacker.col !== toC) {
             this.gameState.board[attacker.row][attacker.col] = null;
             this.gameState.board[toR][toC] = attacker;

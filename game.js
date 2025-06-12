@@ -399,7 +399,7 @@ class Game {
     handleSquareClick(r, c) {
         const { phase, selectedPiece } = this.gameState;
 
-        // --- Phase 1: A piece is selected, and we're choosing an action ---
+        // --- Phase: A piece is selected, waiting for target ---
         if (phase === 'SELECT_TARGET') {
             const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
             if (targetMove) {
@@ -423,7 +423,7 @@ class Game {
             }
         }
 
-        // --- Phase 2: Staging or Resting phases for attacks ---
+        // --- Phase: Mid-attack actions ---
         if (phase === 'SELECT_STAGING') {
             if (this.gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
                 this.executeAttack(r, c);
@@ -443,8 +443,8 @@ class Game {
             return;
         }
 
-        // --- Phase 3: Default behavior (selecting/deselecting pieces) ---
-        // This runs for SELECT_PIECE phase, or if no action was taken in SELECT_TARGET.
+        // --- Phase: Default behavior (selecting/deselecting pieces) ---
+        // This runs for SELECT_PIECE phase, or if an invalid square was clicked in SELECT_TARGET.
         const piece = this.gameState.getPiece(r, c);
         if (piece && piece.owner === this.gameState.currentPlayer) {
             if (selectedPiece === piece) {

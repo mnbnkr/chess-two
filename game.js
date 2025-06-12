@@ -312,7 +312,7 @@ class Renderer {
         this.playerTurnEl.textContent = gameState.currentPlayer.charAt(0).toUpperCase() + gameState.currentPlayer.slice(1);
         this.playerTurnEl.className = 'player-turn ' + gameState.currentPlayer;
         const stdMove = gameState.turn.standardMoveMade ? 'Used' : 'Available';
-        const spcMove = gameState.turn.specialMoveMade ? 'Used' : (game.canPlayerMakeSpecialMove() ? 'Available' : 'Unavailable');
+        const spcMove = gameState.turn.specialMoveMade ? 'Used' : (game.playerHasPossibleMoves('special') ? 'Available' : 'Unavailable');
 
         this.standardMoveStatusEl.textContent = stdMove;
         this.specialMoveStatusEl.textContent = spcMove;
@@ -440,20 +440,18 @@ class Game {
         const isStandard = !['Life', 'Death'].includes(piece.type);
         const { moves, attacks, specialActions } = piece.getPossibleMoves(this.gameState);
 
-        let canDoAction = false;
-        // Check for standard move
-        if (isStandard && !this.gameState.turn.standardMoveMade) {
-            if (moves.length > 0 || attacks.length > 0) canDoAction = true;
-        }
-        // Check for special move (Life/Death)
-        else if (!isStandard) {
-            // Check for normal diagonal move (special move slot)
-            if (!this.gameState.turn.specialMoveMade && moves.length > 0) canDoAction = true;
-            // Check for heal/kill action (standard move slot)
-            if (!this.gameState.turn.standardMoveMade && specialActions.length > 0) canDoAction = true;
-        }
+        // Determine which actions are currently possible based on piece type and turn state
+        const canMakeStandardMove = isStandard && !this.gameState.turn.standardMoveMade;
+        const canMakeSpecialMove = !isStandard && !this.gameState.turn.specialMoveMade;
+        const canUseSpecialAction = !isStandard && !this.gameState.turn.standardMoveMade;
 
-        if (!canDoAction) {
+        // Populate valid actions arrays based on the possibilities
+        const validMoves = (canMakeStandardMove || canMakeSpecialMove) ? (moves || []) : [];
+        const validAttacks = canMakeStandardMove ? (attacks || []) : [];
+        const validSpecialActions = canUseSpecialAction ? (specialActions || []) : [];
+
+        // If there are no possible actions for this piece on this turn, do nothing.
+        if (validMoves.length === 0 && validAttacks.length === 0 && validSpecialActions.length === 0) {
             this.deselect();
             this.gameState.phaseInfo = "This piece has no available moves this turn.";
             return;
@@ -461,10 +459,9 @@ class Game {
 
         this.gameState.selectedPiece = piece;
         this.gameState.phase = 'SELECT_TARGET';
-        this.gameState.validMoves = (isStandard || !this.gameState.turn.specialMoveMade) ? (moves || []) : [];
-        this.gameState.validAttacks = (!isStandard || this.gameState.turn.standardMoveMade) ? [] : (attacks || []);
-        this.gameState.validSpecialActions = (isStandard || this.gameState.turn.standardMoveMade) ? [] : (specialActions || []);
-
+        this.gameState.validMoves = validMoves;
+        this.gameState.validAttacks = validAttacks;
+        this.gameState.validSpecialActions = validSpecialActions;
         this.gameState.phaseInfo = 'Select a destination or target.';
     }
 

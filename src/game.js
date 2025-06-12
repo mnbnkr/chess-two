@@ -1,8 +1,8 @@
 // --- CONSTANTS AND CONFIG --- //
 const BOARD_SIZE = 10;
 const PIECE_SYMBOLS = {
-    white: { King: '♔', Queen: '♕', Rook: '♖', Bishop: '♗', Knight: '♘', Pawn: '♙', Life: '♥', Death: '†' },
-    black: { King: '♚', Queen: '♛', Rook: '♜', Bishop: '♝', Knight: '♞', Pawn: '♟', Life: '♥', Death: '†' }
+    white: { King: '♔', Queen: '♕', Rook: '♖', Bishop: '♗', Knight: '♘', Pawn: '♙', Life: '❤', Death: '💀' },
+    black: { King: '♚', Queen: '♛', Rook: '♜', Bishop: '♝', Knight: '♞', Pawn: '♟', Life: '❤', Death: '💀' }
 };
 
 // --- PIECE CLASSES --- //
@@ -179,11 +179,11 @@ class Life extends Piece {
     getPossibleMoves(gameState) {
         const moves = [];
         const specialActions = [];
-        // Diagonal Movement. (r+c)%2 === 0 is a light square.
+        // Diagonal Movement. (r+c)%2 !== 0 is a light square.
         [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => {
             const r = this.row + dr;
             const c = this.col + dc;
-            if (gameState.isValid(r, c) && !gameState.getPiece(r, c) && (r + c) % 2 === 0) {
+            if (gameState.isValid(r, c) && !gameState.getPiece(r, c) && (r + c) % 2 !== 0) {
                 moves.push({ r, c });
             }
         });
@@ -192,7 +192,7 @@ class Life extends Piece {
         [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => {
             const r = this.row + dr;
             const c = this.col + dc;
-            if (gameState.isValid(r, c) && (r + c) % 2 === 0) {
+            if (gameState.isValid(r, c) && (r + c) % 2 !== 0) {
                 const target = gameState.getPiece(r, c);
                 // Can heal friendly pieces without a shield.
                 if (target && target.owner === this.owner && !target.hasShield) {
@@ -209,11 +209,11 @@ class Death extends Piece {
         const moves = [];
         const specialActions = [];
 
-        // Diagonal Movement. (r+c)%2 !== 0 is a dark square.
+        // Diagonal Movement. (r+c)%2 === 0 is a dark square.
         [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => {
             const r = this.row + dr;
             const c = this.col + dc;
-            if (gameState.isValid(r, c) && !gameState.getPiece(r, c) && (r + c) % 2 !== 0) {
+            if (gameState.isValid(r, c) && !gameState.getPiece(r, c) && (r + c) % 2 === 0) {
                 moves.push({ r, c });
             }
         });
@@ -222,7 +222,7 @@ class Death extends Piece {
         [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => {
             const r = this.row + dr;
             const c = this.col + dc;
-            if (gameState.isValid(r, c) && (r + c) % 2 !== 0) {
+            if (gameState.isValid(r, c) && (r + c) % 2 === 0) {
                 const target = gameState.getPiece(r, c);
                 // Can kill any unprotected piece (friend or foe)
                 if (target && !this._isProtected(target, gameState)) {
@@ -270,7 +270,8 @@ class Renderer {
                 square.dataset.r = r;
                 square.dataset.c = c;
                 square.classList.add('square');
-                square.classList.add((r + c) % 2 === 0 ? 'light' : 'dark');
+                // Corrected Color Logic: (r+c) even is dark, odd is light.
+                square.classList.add((r + c) % 2 === 0 ? 'dark' : 'light');
 
                 const piece = getPiece(r, c);
                 if (piece) {
@@ -322,7 +323,7 @@ class Renderer {
 
     updateStatus(gameState, game) {
         this.playerTurnEl.textContent = gameState.currentPlayer.charAt(0).toUpperCase() + gameState.currentPlayer.slice(1);
-        this.playerTurnEl.className = gameState.currentPlayer;
+        this.playerTurnEl.className = 'player-turn ' + gameState.currentPlayer;
         const stdMove = gameState.turn.standardMoveMade ? 'Used' : 'Available';
 
         let spcMove = 'Unavailable';
@@ -395,15 +396,17 @@ class Game {
         const board = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
         const backRank = ['Rook', 'Knight', 'Bishop', 'Queen', 'King', 'Bishop', 'Knight', 'Rook'];
 
-        board[0][0] = new Life('black', 0, 0, 'Life');
-        board[0][9] = new Death('black', 0, 9, 'Death');
+        // Black Pieces (Rank 1, r=0) - Death on dark A1(0,0), Life on light J1(0,9)
+        board[0][0] = new Death('black', 0, 0, 'Death');
+        board[0][9] = new Life('black', 0, 9, 'Life');
         backRank.forEach((type, i) => {
             board[0][i + 1] = new (this.getPieceClass(type))('black', 0, i + 1, type);
         });
         for (let c = 0; c < 10; c++) board[1][c] = new Pawn('black', 1, c, 'Pawn');
 
-        board[9][0] = new Death('white', 9, 0, 'Death');
-        board[9][9] = new Life('white', 9, 9, 'Life');
+        // White Pieces (Rank 10, r=9) - Life on light A10(9,0), Death on dark J10(9,9)
+        board[9][0] = new Life('white', 9, 0, 'Life');
+        board[9][9] = new Death('white', 9, 9, 'Death');
         backRank.forEach((type, i) => {
             board[9][i + 1] = new (this.getPieceClass(type))('white', 9, i + 1, type);
         });
@@ -439,21 +442,36 @@ class Game {
     }
 
     handleSelectTarget(r, c) {
-        const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
-        const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
-        const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
-        const clickedPiece = this.gameState.getPiece(r, c);
+        // If player re-clicks the selected piece, deselect it.
+        if (this.gameState.selectedPiece.row === r && this.gameState.selectedPiece.col === c) {
+            this.deselect();
+            return;
+        }
 
+        const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
         if (targetMove) {
             this.executeMove(this.gameState.selectedPiece, r, c, targetMove);
-        } else if (targetAttack) {
+            return;
+        }
+
+        const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
+        if (targetAttack) {
             this.initiateAttack(this.gameState.selectedPiece, this.gameState.getPiece(r, c));
-        } else if (targetSpecial) {
+            return;
+        }
+
+        const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
+        if (targetSpecial) {
             this.executeSpecialAction(this.gameState.selectedPiece, targetSpecial);
-        } else if (clickedPiece && clickedPiece.owner === this.gameState.currentPlayer) {
-            this.selectPiece(clickedPiece);
+            return;
+        }
+
+        // If no valid action was found on the clicked square, check if it's another friendly piece.
+        const clickedPiece = this.gameState.getPiece(r, c);
+        if (clickedPiece && clickedPiece.owner === this.gameState.currentPlayer) {
+            this.selectPiece(clickedPiece); // Switch selection to the new piece
         } else {
-            this.deselect();
+            this.deselect(); // Clicked on an invalid square, so deselect.
         }
     }
 
@@ -709,6 +727,7 @@ class Game {
                 movingPiece.hasShield = false;
                 return false; // Not destroyed
             } else {
+                this.gameState.board[movingPiece.row][movingPiece.col] = null; // Destroy the piece
                 return true; // Is destroyed
             }
         }

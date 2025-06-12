@@ -14,7 +14,7 @@ body {
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    min-height: 100vh;
     background-color: #333;
     color: #fff;
     margin: 0;
@@ -24,6 +24,7 @@ body {
     display: flex;
     gap: 30px;
     align-items: flex-start;
+    padding: 20px;
 }
 
 #ui-panel {
@@ -32,6 +33,7 @@ body {
     background-color: #444;
     padding: 20px;
     border-radius: 8px;
+    flex-shrink: 0;
 }
 
 #status-panel {
@@ -199,4 +201,33 @@ body {
     background-color: var(--highlight-special);
     cursor: pointer;
     pointer-events: all;
+}
+
+/* --- RESPONSIVE DESIGN --- */
+@media screen and (max-width: 1024px) {
+    :root {
+        --board-size: min(90vw, 500px);
+    }
+
+    body {
+        height: auto;
+        /* Allow scrolling */
+        align-items: initial;
+    }
+
+    #game-container {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    #board-container {
+        order: 1;
+        /* Board appears first */
+    }
+
+    #ui-panel {
+        order: 2;
+        /* UI Panel appears second */
+        width: var(--board-size);
+    }
 }

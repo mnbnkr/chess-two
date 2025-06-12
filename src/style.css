@@ -65,29 +65,6 @@ body {
     color: white;
 }
 
-
-#end-turn-btn {
-    width: 100%;
-    padding: 12px;
-    font-size: 1.1em;
-    cursor: pointer;
-    background-color: #5a5a5a;
-    color: #ddd;
-    border: 1px solid #777;
-    border-radius: 5px;
-    transition: background-color 0.2s;
-}
-
-#end-turn-btn:hover {
-    background-color: #6a6a6a;
-}
-
-#end-turn-btn:disabled {
-    background-color: #444;
-    color: #888;
-    cursor: not-allowed;
-}
-
 #board-container {
     border: 5px solid #222;
 }
@@ -127,11 +104,8 @@ body {
     position: relative;
     z-index: 2;
     -webkit-user-select: none;
-    /* Safari */
     -ms-user-select: none;
-    /* IE 10 and IE 11 */
     user-select: none;
-    /* Standard syntax */
 }
 
 .piece.white {
@@ -142,6 +116,21 @@ body {
 .piece.black {
     color: #111111;
 }
+
+.piece.life-piece {
+    color: #00c853;
+    /* Material Green */
+}
+
+.piece.death-piece {
+    color: #424242;
+    /* Dark Grey */
+}
+
+.piece.white.death-piece {
+    text-shadow: 0 0 4px #ccc;
+}
+
 
 .piece.has-shield::after {
     content: '';
@@ -211,7 +200,6 @@ body {
 
     body {
         height: auto;
-        /* Allow scrolling */
         align-items: initial;
     }
 
@@ -222,12 +210,10 @@ body {
 
     #board-container {
         order: 1;
-        /* Board appears first */
     }
 
     #ui-panel {
         order: 2;
-        /* UI Panel appears second */
         width: var(--board-size);
     }
 }

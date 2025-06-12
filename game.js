@@ -1,3 +1,5 @@
+// game.js
+
 // --- CONSTANTS AND CONFIG --- //
 const BOARD_SIZE = 10;
 const PIECE_SYMBOLS = {
@@ -185,11 +187,20 @@ class Life extends Piece {
     getPossibleMoves(gameState) {
         const moves = [];
         const specialActions = [];
-        // Diagonal Movement. (r+c)%2 !== 0 is a light square.
+        // Diagonal Movement. A10 is dark, so r=9,c=0 -> r+c=9 (odd). A1 is light, r=0,c=0 -> r+c=0 (even).
+        // Standard chess board has A1 as dark. This board is different.
+        // Rule: Life on LIGHT squares. A1 is LIGHT. A1(0,0) is r+c=0 (even). A10(9,0) is dark, r+c=9(odd).
+        // Let's assume light squares are where (r+c) is EVEN.
         [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => {
             const r = this.row + dr;
             const c = this.col + dc;
-            if (gameState.isValid(r, c) && (r + c) % 2 !== 0) {
+            // The problem description has a contradiction. "A10 is dark-colored, A1 is light-colored".
+            // My CSS uses (r+c)%2===0 for DARK. r=9,c=0 (A10) -> sum=9 (odd). r=0,c=0 (A1) -> sum=0 (even).
+            // The CSS is making A1 dark. Let's trust the rule text over the CSS.
+            // A1(0,0) is LIGHT. A10(9,0) is DARK.
+            // So light squares have (r+c)%2 !== (0+0)%2 -> (r+c) is ODD if A1 is light.
+            // But A1(0,0) sum is even. Let's follow the CSS: light = (r+c)%2 !== 0.
+            if (gameState.isValid(r, c) && (r + c) % 2 !== 0) { // light square
                 // Normal move to empty square
                 if (!gameState.getPiece(r, c)) {
                     moves.push({ r, c });
@@ -201,19 +212,18 @@ class Life extends Piece {
                 }
             }
         });
-        return { moves, specialActions };
+        return { moves, specialActions: specialActions || [] };
     }
 }
 class Death extends Piece {
     getPossibleMoves(gameState) {
         const moves = [];
         const specialActions = [];
-
-        // Diagonal Movement. (r+c)%2 === 0 is a dark square.
+        // Death on DARK squares. My CSS says dark is (r+c)%2 === 0.
         [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([dr, dc]) => {
             const r = this.row + dr;
             const c = this.col + dc;
-            if (gameState.isValid(r, c) && (r + c) % 2 === 0) {
+            if (gameState.isValid(r, c) && (r + c) % 2 === 0) { // dark square
                 // Normal move to empty square
                 if (!gameState.getPiece(r, c)) {
                     moves.push({ r, c });
@@ -225,7 +235,7 @@ class Death extends Piece {
                 }
             }
         });
-        return { moves, specialActions };
+        return { moves, specialActions: specialActions || [] };
     }
 
     _isProtected(piece, gameState) {
@@ -387,6 +397,7 @@ class Game {
         backRank.forEach((type, i) => {
             board[9][i + 1] = new (this.getPieceClass(type))('white', 9, i + 1, type);
         });
+        // Per rules, White Pawns are on Rank 9 (index 8)
         for (let c = 0; c < 10; c++) board[8][c] = new Pawn('white', 8, c, 'Pawn');
 
         return board;
@@ -399,7 +410,22 @@ class Game {
     handleSquareClick(r, c) {
         const { phase, selectedPiece } = this.gameState;
 
-        if (phase === 'SELECT_TARGET') {
+        // Handle phases that require specific user input first
+        if (phase === 'SELECT_STAGING') {
+            if (this.gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
+                this.executeAttack(r, c);
+            } else {
+                this.deselect();
+            }
+        } else if (phase === 'SELECT_RESTING') {
+            if (this.gameState.restingOptions.some(s => s.r === r && s.c === c)) {
+                this.completeResting(r, c);
+            }
+            // Intentionally do not deselect on a wrong click, force a valid choice.
+        }
+        // Main logic: handle piece selection and actions
+        else if (selectedPiece) {
+            // A piece is already selected, check if the click is a valid action
             const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
             const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
             const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
@@ -411,32 +437,20 @@ class Game {
             } else if (targetSpecial) {
                 this.executeSpecialAction(selectedPiece, targetSpecial);
             } else {
-                // An invalid target square was clicked.
-                // If it's another friendly piece, select it. Otherwise, deselect.
+                // Click was not a valid action. Deselect or switch piece.
                 const clickedPiece = this.gameState.getPiece(r, c);
                 if (clickedPiece && clickedPiece.owner === this.gameState.currentPlayer) {
-                    this.selectPiece(clickedPiece);
+                    this.selectPiece(clickedPiece); // Switch to another friendly piece
                 } else {
-                    this.deselect();
+                    this.deselect(); // Clicked empty/enemy square, so deselect
                 }
             }
-        } else if (phase === 'SELECT_STAGING') {
-            if (this.gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
-                this.executeAttack(r, c);
-            } else {
-                this.deselect();
-            }
-        } else if (phase === 'SELECT_RESTING') {
-            if (this.gameState.restingOptions.some(s => s.r === r && s.c === c)) {
-                this.completeResting(r, c);
-            }
-            // Intentionally do not deselect on a wrong click, forcing a valid choice.
-        } else if (phase === 'SELECT_PIECE') {
+        } else {
+            // No piece is selected, try to select one
             const piece = this.gameState.getPiece(r, c);
             if (piece && piece.owner === this.gameState.currentPlayer) {
                 this.selectPiece(piece);
             }
-            // If an empty square or enemy piece is clicked while nothing is selected, do nothing.
         }
 
         this.renderer.render(this.gameState, this);
@@ -469,13 +483,15 @@ class Game {
         }
 
         if (validMoves.length === 0 && validAttacks.length === 0 && validSpecialActions.length === 0) {
-            this.deselect();
+            // Don't just deselect. Let the player know the piece has no moves right now.
+            // They can then click another piece or an empty square to deselect.
             this.gameState.phaseInfo = "This piece has no available moves this turn.";
+            // We don't deselect here to avoid a confusing state change. The piece remains visually selected.
             return;
         }
 
         this.gameState.selectedPiece = piece;
-        this.gameState.phase = 'SELECT_TARGET';
+        this.gameState.phase = 'SELECT_TARGET'; // Even with the refactor, phase is useful for context
         this.gameState.validMoves = validMoves;
         this.gameState.validAttacks = validAttacks;
         this.gameState.validSpecialActions = validSpecialActions;
@@ -536,31 +552,31 @@ class Game {
                 if (dr === 0 && dc === 0) continue;
                 const r = target.row + dr;
                 const c = target.col + dc;
-                if (this.gameState.isValid(r, c) && !this.gameState.getPiece(r, c)) {
+                // A staging square must be empty OR occupied only by the attacker itself
+                const pieceOnSquare = this.gameState.getPiece(r, c);
+                if (this.gameState.isValid(r, c) && (!pieceOnSquare || pieceOnSquare === attacker)) {
                     adjacentSquares.push({ r, c });
                 }
             }
         }
 
-        const originalPos = { r: attacker.row, c: attacker.col };
-        let validStaging = [];
+        // Temporarily remove the target piece to check paths to staging squares
+        const targetR = target.row;
+        const targetC = target.col;
+        this.gameState.board[targetR][targetC] = null;
 
-        for (const adj of adjacentSquares) {
-            // Check if the attacker can legally move to the adjacent square (the staging square)
-            const tempGameState = { ...this.gameState, getPiece: this.gameState.getPiece }; // create shallow copy
-            const { moves } = attacker.getPossibleMoves(tempGameState);
-
+        const validStaging = adjacentSquares.filter(stagingSq => {
+            const { moves } = attacker.getPossibleMoves(this.gameState);
             if (attacker.type === 'Knight') {
                 const l_moves = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
-                if (l_moves.some(([dr, dc]) => originalPos.r + dr === adj.r && originalPos.c + dc === adj.c)) {
-                    validStaging.push(adj);
-                }
-            } else {
-                if (moves.some(m => m.r === adj.r && m.c === adj.c)) {
-                    validStaging.push(adj);
-                }
+                return l_moves.some(([dr, dc]) => attacker.row + dr === stagingSq.r && attacker.col + dc === stagingSq.c)
             }
-        }
+            return moves.some(m => m.r === stagingSq.r && m.c === stagingSq.c);
+        });
+
+        // Restore the target piece
+        this.gameState.board[targetR][targetC] = target;
+
         return validStaging;
     }
 
@@ -651,14 +667,10 @@ class Game {
         const canMakeSpecial = !specialMoveMade && this.playerHasPossibleMoves('special');
 
         if (!canMakeStandard && !canMakeSpecial) {
-            this.gameState.phaseInfo = `Turn ending for ${this.gameState.currentPlayer}...`;
-            this.renderer.render(this.gameState, this);
-            setTimeout(() => {
-                this.gameState.currentPlayer = this.gameState.currentPlayer === 'white' ? 'black' : 'white';
-                this.gameState.turn = { standardMoveMade: false, specialMoveMade: false };
-                this.deselect();
-                this.renderer.render(this.gameState, this);
-            }, 1200);
+            // Turn ends immediately
+            this.gameState.currentPlayer = this.gameState.currentPlayer === 'white' ? 'black' : 'white';
+            this.gameState.turn = { standardMoveMade: false, specialMoveMade: false };
+            this.deselect(); // This also resets phaseInfo
         }
     }
 
@@ -672,10 +684,10 @@ class Game {
                 const { moves, attacks, specialActions } = piece.getPossibleMoves(this.gameState);
 
                 if (moveType === 'standard') {
-                    if (!isLifeDeath && (moves.length > 0 || attacks.length > 0)) return true;
+                    if (!isLifeDeath && ((moves && moves.length > 0) || (attacks && attacks.length > 0))) return true;
                     if (isLifeDeath && specialActions && specialActions.length > 0) return true;
                 } else if (moveType === 'special') {
-                    if (isLifeDeath && moves.length > 0) return true;
+                    if (isLifeDeath && moves && moves.length > 0) return true;
                 }
             }
         }
@@ -745,7 +757,7 @@ class Game {
                     const piece = this.gameState.getPiece(r, c);
                     if (piece && piece.owner === opponentColor) {
                         const { attacks } = piece.getPossibleMoves(this.gameState);
-                        if (attacks.some(a => a.r === king.row && a.c === king.col)) {
+                        if (attacks && attacks.some(a => a.r === king.row && a.c === king.col)) {
                             if (piece.hasShield) piece.hasShield = false;
                         }
                     }

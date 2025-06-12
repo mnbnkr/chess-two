@@ -399,50 +399,62 @@ class Game {
     handleSquareClick(r, c) {
         const { phase, selectedPiece } = this.gameState;
 
-        switch (phase) {
-            case 'SELECT_PIECE': {
-                const piece = this.gameState.getPiece(r, c);
-                if (piece && piece.owner === this.gameState.currentPlayer) {
-                    this.selectPiece(piece);
-                }
-                break;
+        // --- Phase 1: A piece is selected, and we're choosing an action ---
+        if (phase === 'SELECT_TARGET') {
+            const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
+            if (targetMove) {
+                this.executeMove(selectedPiece, r, c, targetMove);
+                this.renderer.render(this.gameState, this);
+                return;
             }
-            case 'SELECT_TARGET': {
-                const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
-                const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
-                const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
-                const clickedPiece = this.gameState.getPiece(r, c);
 
-                if (targetMove) {
-                    this.executeMove(selectedPiece, r, c, targetMove);
-                } else if (targetAttack) {
-                    this.initiateAttack(selectedPiece, this.gameState.getPiece(r, c));
-                } else if (targetSpecial) {
-                    this.executeSpecialAction(selectedPiece, targetSpecial);
-                } else if (clickedPiece && clickedPiece.owner === this.gameState.currentPlayer) {
-                    this.selectPiece(clickedPiece);
-                } else {
-                    this.deselect();
-                }
-                break;
+            const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
+            if (targetAttack) {
+                this.initiateAttack(selectedPiece, this.gameState.getPiece(r, c));
+                this.renderer.render(this.gameState, this);
+                return;
             }
-            case 'SELECT_STAGING': {
-                if (this.gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
-                    this.executeAttack(r, c);
-                } else {
-                    this.deselect();
-                }
-                break;
-            }
-            case 'SELECT_RESTING': {
-                if (this.gameState.restingOptions.some(s => s.r === r && s.c === c)) {
-                    this.completeResting(r, c);
-                }
-                // Intentionally do nothing on wrong click, force player to choose a resting spot.
-                break;
+
+            const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
+            if (targetSpecial) {
+                this.executeSpecialAction(selectedPiece, targetSpecial);
+                this.renderer.render(this.gameState, this);
+                return;
             }
         }
 
+        // --- Phase 2: Staging or Resting phases for attacks ---
+        if (phase === 'SELECT_STAGING') {
+            if (this.gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
+                this.executeAttack(r, c);
+            } else {
+                this.deselect();
+            }
+            this.renderer.render(this.gameState, this);
+            return;
+        }
+
+        if (phase === 'SELECT_RESTING') {
+            if (this.gameState.restingOptions.some(s => s.r === r && s.c === c)) {
+                this.completeResting(r, c);
+            }
+            // Intentionally don't deselect on a wrong click, forcing a valid choice.
+            this.renderer.render(this.gameState, this);
+            return;
+        }
+
+        // --- Phase 3: Default behavior (selecting/deselecting pieces) ---
+        // This runs for SELECT_PIECE phase, or if no action was taken in SELECT_TARGET.
+        const piece = this.gameState.getPiece(r, c);
+        if (piece && piece.owner === this.gameState.currentPlayer) {
+            if (selectedPiece === piece) {
+                this.deselect(); // Clicked the same piece again, so deselect.
+            } else {
+                this.selectPiece(piece); // Select a different friendly piece.
+            }
+        } else {
+            this.deselect(); // Clicked an empty square or an enemy piece.
+        }
         this.renderer.render(this.gameState, this);
     }
 
@@ -648,13 +660,6 @@ class Game {
         this.checkAndEndTurn();
     }
 
-    endTurn() {
-        this.gameState.currentPlayer = this.gameState.currentPlayer === 'white' ? 'black' : 'white';
-        this.gameState.turn = { standardMoveMade: false, specialMoveMade: false };
-        this.deselect();
-        this.renderer.render(this.gameState, this);
-    }
-
     checkAndEndTurn() {
         const { standardMoveMade, specialMoveMade } = this.gameState.turn;
 
@@ -664,7 +669,12 @@ class Game {
         if (!canMakeStandard && !canMakeSpecial) {
             this.gameState.phaseInfo = `Turn ending for ${this.gameState.currentPlayer}...`;
             this.renderer.render(this.gameState, this);
-            setTimeout(() => this.endTurn(), 1200);
+            setTimeout(() => {
+                this.gameState.currentPlayer = this.gameState.currentPlayer === 'white' ? 'black' : 'white';
+                this.gameState.turn = { standardMoveMade: false, specialMoveMade: false };
+                this.deselect();
+                this.renderer.render(this.gameState, this);
+            }, 1200);
         }
     }
 

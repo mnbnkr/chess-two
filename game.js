@@ -399,62 +399,46 @@ class Game {
     handleSquareClick(r, c) {
         const { phase, selectedPiece } = this.gameState;
 
-        // --- Phase: A piece is selected, waiting for target ---
         if (phase === 'SELECT_TARGET') {
             const targetMove = this.gameState.validMoves.find(m => m.r === r && m.c === c);
+            const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
+            const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
+
             if (targetMove) {
                 this.executeMove(selectedPiece, r, c, targetMove);
-                this.renderer.render(this.gameState, this);
-                return;
-            }
-
-            const targetAttack = this.gameState.validAttacks.find(a => a.r === r && a.c === c);
-            if (targetAttack) {
+            } else if (targetAttack) {
                 this.initiateAttack(selectedPiece, this.gameState.getPiece(r, c));
-                this.renderer.render(this.gameState, this);
-                return;
-            }
-
-            const targetSpecial = this.gameState.validSpecialActions.find(s => s.r === r && s.c === c);
-            if (targetSpecial) {
+            } else if (targetSpecial) {
                 this.executeSpecialAction(selectedPiece, targetSpecial);
-                this.renderer.render(this.gameState, this);
-                return;
+            } else {
+                // An invalid target square was clicked.
+                // If it's another friendly piece, select it. Otherwise, deselect.
+                const clickedPiece = this.gameState.getPiece(r, c);
+                if (clickedPiece && clickedPiece.owner === this.gameState.currentPlayer) {
+                    this.selectPiece(clickedPiece);
+                } else {
+                    this.deselect();
+                }
             }
-        }
-
-        // --- Phase: Mid-attack actions ---
-        if (phase === 'SELECT_STAGING') {
+        } else if (phase === 'SELECT_STAGING') {
             if (this.gameState.stagingOptions.some(s => s.r === r && s.c === c)) {
                 this.executeAttack(r, c);
             } else {
                 this.deselect();
             }
-            this.renderer.render(this.gameState, this);
-            return;
-        }
-
-        if (phase === 'SELECT_RESTING') {
+        } else if (phase === 'SELECT_RESTING') {
             if (this.gameState.restingOptions.some(s => s.r === r && s.c === c)) {
                 this.completeResting(r, c);
             }
-            // Intentionally don't deselect on a wrong click, forcing a valid choice.
-            this.renderer.render(this.gameState, this);
-            return;
+            // Intentionally do not deselect on a wrong click, forcing a valid choice.
+        } else if (phase === 'SELECT_PIECE') {
+            const piece = this.gameState.getPiece(r, c);
+            if (piece && piece.owner === this.gameState.currentPlayer) {
+                this.selectPiece(piece);
+            }
+            // If an empty square or enemy piece is clicked while nothing is selected, do nothing.
         }
 
-        // --- Phase: Default behavior (selecting/deselecting pieces) ---
-        // This runs for SELECT_PIECE phase, or if an invalid square was clicked in SELECT_TARGET.
-        const piece = this.gameState.getPiece(r, c);
-        if (piece && piece.owner === this.gameState.currentPlayer) {
-            if (selectedPiece === piece) {
-                this.deselect(); // Clicked the same piece again, so deselect.
-            } else {
-                this.selectPiece(piece); // Select a different friendly piece.
-            }
-        } else {
-            this.deselect(); // Clicked an empty square or an enemy piece.
-        }
         this.renderer.render(this.gameState, this);
     }
 

@@ -54,7 +54,7 @@ The turn is not over until the player has made all possible moves (MUST make the
         *   Passing through **Life**: The moving piece gains a Shield (if it did not already have one).
         *   Passing through **Death**: The moving piece loses its Shield. If it has no Shield, it is destroyed and removed from the board (the move/attack still completes before the moving piece dies).
     *   **Special Actions:** Life and Death can perform special actions that use up the "Standard Move" AND the "Special Move" slot for the current turn (so the move can't be performed if BOTH moves are not available).
-        *   **Life's Heal:** Can grant a Shield to an adjacent, friendly or foe piece on a diagonal light square (if the piece doesn't have one).
+        *   **Life's Heal:** Can grant a Shield to an adjacent, friendly or foe piece on a diagonal light square (if the piece doesn't have one). This action also makes the piece immune to any damage for 1 turn.
         *   **Death's Kill:** Can destroy any piece (friend or foe) on an adjacent diagonal dark square - it can only do so by moving onto that square. **Condition:** This is only possible if the target piece is *not* "protected" by one of its allies on a square adjacent (horizontally or vertically (same as light-colored squares)) to it.
 
 #### **4. Attack, Shield & Resting Mechanic**
@@ -72,7 +72,7 @@ This mechanic redefines how attacks are executed. To attack, a player selects th
     3.  This triggers a **"Resting Phase."** The player must now click to choose where the attacker rests: either on the **staging square** or on the **vacated square** where the target piece was. The move is not complete until this choice is made.
 
 *   **Rook Attack Example:** A White Rook on `b1` attacks a Black Rook on `b8` (no shield). The White player selects their Rook on `b1`, then the target on `b8`. Since the staging square (`b7`) is empty, the attack is valid. The Black Rook is removed. The UI must then prompt the White player to click on either the staging square (`b7`) or the vacated square (`b8`) to place their Rook, concluding the move.
-*   **Knight Attack Example (special!):** The Knight's attack requires identifying valid staging squares from which to launch the attack.
+*   **Knight Attack Example (unusual interaction!):** The Knight's attack requires identifying valid staging squares from which to launch the attack.
     *   **Scenario:** A White Knight on `c2` attacks a Black Pawn on `d4`. The potential staging squares adjacent to `d4` from which the Knight could theoretically launch its L-shaped attack are `c4` and `d3`.
     *   **Execution:** The player selects the White Knight on `c2`, then the target Pawn on `d4`. For the attack to be valid, at least one of these staging squares (`c4` or `d3`) must be empty. If both are empty, the player must first click which staging square to use for the attack.
     *   **Resolution (Shielded):** If the Pawn on `d4` had a shield, the shield is removed, and the White Knight ends its move resting on the chosen staging square (e.g., `c4`).

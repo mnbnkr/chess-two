@@ -130,7 +130,22 @@ body {
 #board-container {
     border: 5px solid var(--border-color);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+    position: relative;
 }
+
+#board-container::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background-color: rgba(0, 0, 0, 0.7);
+    transform: translateY(-50%);
+    z-index: 3;
+    pointer-events: none;
+}
+
 
 #game-board {
     width: var(--board-size);
@@ -207,6 +222,11 @@ body {
     box-shadow: inset 0 0 7px 2px rgba(76, 175, 80, 0.8), 0 0 6px 1px rgba(76, 175, 80, 0.5);
     pointer-events: none;
     z-index: 1;
+    transition: box-shadow 0.3s ease-in-out;
+}
+
+.piece.has-shield.is-immune::after {
+    box-shadow: inset 0 0 10px 4px rgba(70, 200, 80, 1), 0 0 10px 3px rgba(70, 200, 80, 0.9);
 }
 
 .highlight-overlay {

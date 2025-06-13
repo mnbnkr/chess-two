@@ -1,6 +1,7 @@
 # Chess Two / Shield Chess / Chess: Shield & Scythe
 (10x10 Chess with 2 hit points, Life and Death)
-This is a "draft codebase" for this game.
+
+This is an unfinished 'draft codebase'.
 
 ### Game Rules: "Chess Two" (FROM PROMPT)
 

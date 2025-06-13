@@ -50,9 +50,9 @@ The turn is not over until the player has made all possible moves (MUST make the
     *   **Pass-Through Effect (Immateriality):** Standard pieces can pass through Life and Death pieces as if their squares were empty. Doing so triggers an effect:
         *   Passing through **Life**: The moving piece gains a Shield (if it did not already have one).
         *   Passing through **Death**: The moving piece loses its Shield. If it has no Shield, it is destroyed and removed from the board (the move/attack still completes before the moving piece dies).
-    *   **Special Actions (Consumes the Standard Move):** Life and Death can perform special actions that use up the "Standard Move" AND the "Special Move" slot for the current turn (so the move can't be performed if BOTH moves are not available).
-        *   **Life's Heal:** Can grant a Shield to an adjacent, friendly or foe piece on a diagonal light square (if the piece doesn't have one). This action consumes the turn's Standard Move.
-        *   **Death's Kill:** Can destroy any piece (friend or foe) on an adjacent diagonal dark square - it can only do so by moving onto that square. This action consumes the turn's Standard Move. **Condition:** This is only possible if the target piece is *not* "protected" by one of its allies on a square adjacent (horizontally or vertically (same as light-colored squares)) to it.
+    *   **Special Actions:** Life and Death can perform special actions that use up the "Standard Move" AND the "Special Move" slot for the current turn (so the move can't be performed if BOTH moves are not available).
+        *   **Life's Heal:** Can grant a Shield to an adjacent, friendly or foe piece on a diagonal light square (if the piece doesn't have one).
+        *   **Death's Kill:** Can destroy any piece (friend or foe) on an adjacent diagonal dark square - it can only do so by moving onto that square. **Condition:** This is only possible if the target piece is *not* "protected" by one of its allies on a square adjacent (horizontally or vertically (same as light-colored squares)) to it.
 
 #### **4. Attack, Shield & Resting Mechanic**
 

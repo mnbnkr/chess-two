@@ -175,6 +175,8 @@ body {
 
 .piece.white {
     color: #ffffff;
+    /* Multi-layered shadow for better definition and glow */
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8), 0 0 8px rgba(0, 0, 0, 0.95);
 }
 
 .piece.black {
@@ -184,16 +186,14 @@ body {
 .piece.life-piece {
     color: var(--life-color);
     font-weight: bold;
-    opacity: 0.75;
+    opacity: 0.50;
+    text-shadow: none;
 }
 
 .piece.death-piece {
     color: var(--death-color);
-    opacity: 0.75;
-}
-
-.piece.white.death-piece {
-    text-shadow: 0 0 4px #fff;
+    opacity: 0.50;
+    text-shadow: none;
 }
 
 .piece.has-shield::after {
@@ -204,7 +204,6 @@ body {
     width: 90%;
     height: 90%;
     border-radius: 50%;
-    /* Updated to use green shield color */
     box-shadow: inset 0 0 7px 2px rgba(76, 175, 80, 0.8), 0 0 6px 1px rgba(76, 175, 80, 0.5);
     pointer-events: none;
     z-index: 1;

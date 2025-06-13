@@ -237,7 +237,8 @@ class Life extends Piece {
                     moves.push({ r, c });
                 }
                 const target = gameState.getPiece(r, c);
-                if (target && target.owner === this.owner && !target.hasShield && !['King', 'Life', 'Death'].includes(target.type)) {
+                // Can heal ANY piece (friend or foe), but not Kings, Queens, or other Life/Death.
+                if (target && !target.hasShield && !['King', 'Queen', 'Life', 'Death'].includes(target.type)) {
                     specialActions.push({ r, c, type: 'heal' });
                 }
             }
@@ -599,7 +600,9 @@ class Game {
                 return this._calculateKnightStagingSquares(attacker, target);
             case 'Pawn':
             case 'King':
-                return this._calculateAdjacentAttackStagingSquares(attacker, target);
+                // For adjacent attacks, the staging square is conceptually the attacker's own square.
+                // We pass this to executeAttack which will know how to handle it based on piece type.
+                return [{ r: attacker.row, c: attacker.col }];
             default:
                 return [];
         }
@@ -615,46 +618,44 @@ class Game {
         const isStraight = (dr === 0 || dc === 0) && (dr !== 0 || dc !== 0);
         const isDiagonal = (Math.abs(rT - rA) === Math.abs(cT - cA));
 
-        // Validate direction for the specific piece type
-        if ((attacker.type === 'Rook' && !isStraight) || (attacker.type === 'Bishop' && !isDiagonal)) {
+        if ((attacker.type === 'Rook' && !isStraight) || (attacker.type === 'Bishop' && !isDiagonal) || (attacker.type === 'Queen' && !isStraight && !isDiagonal)) {
             return [];
         }
 
-        // Check for obstructions between the attacker and the target
+        // The staging square is the one adjacent to the target, along the attack vector.
+        const stagingR = rT - dr;
+        const stagingC = cT - dc;
+
+        // If the staging square IS the attacker's square, it's an adjacent attack.
+        // The path is implicitly clear. The attack is valid.
+        if (stagingR === rA && stagingC === cA) {
+            return [{ r: rA, c: cA }];
+        }
+
+        // For a ranged attack, the staging square must be empty.
+        if (!this.gameState.isValid(stagingR, stagingC) || this.gameState.getPiece(stagingR, stagingC)) {
+            return [];
+        }
+
+        // Check path from attacker TO the staging square for obstructions.
         let r = rA + dr;
         let c = cA + dc;
-        while (r !== rT || c !== cT) {
-            const piece = this.gameState.getPiece(r, c);
-            if (piece && piece.type !== 'Life' && piece.type !== 'Death') {
-                return []; // Path is blocked
+        while (r !== stagingR || c !== stagingC) {
+            const pieceOnPath = this.gameState.getPiece(r, c);
+            if (pieceOnPath && pieceOnPath.type !== 'Life' && pieceOnPath.type !== 'Death') {
+                return []; // Path is blocked.
             }
             r += dr;
             c += dc;
         }
 
-        // Path is clear. Check for empty staging squares adjacent to target on the line of attack.
-        const potentialSquares = [
-            { r: rT - dr, c: cT - dc }, // Square "in front" of target
-            { r: rT + dr, c: cT + dc }  // Square "behind" target
-        ];
-
-        return potentialSquares.filter(s =>
-            (s.r !== rA || s.c !== cA) && // Cannot stage on attacker's current square
-            this.gameState.isValid(s.r, s.c) &&
-            !this.gameState.getPiece(s.r, s.c)
-        );
+        // Path is clear and staging square is empty.
+        return [{ r: stagingR, c: stagingC }];
     }
 
     _calculateKnightStagingSquares(attacker, target) {
         const rT = target.row, cT = target.col;
 
-        // Potential staging squares are the 8 locations from which a Knight can jump TO the target.
-        // We then filter these to only squares adjacent to the target, per the special Knight rule.
-        // The rule example: Knight on c2 attacks d4, staging squares are c4 and d3.
-        // Let's analyze this specific transformation.
-        // Attack vector (c2->d4) is (+1 col, +2 row) -> (dc=1, dr=2) assuming a1=0,0 bottom-left.
-        // Staging squares (c4, d3) are (target_c-1, target_r) and (target_c, target_r-1).
-        // Let's use board coordinates (0,0 top-left). Attacker (rA,cA), Target(rT,cT).
         const dr_abs = Math.abs(rT - attacker.row);
         const dc_abs = Math.abs(cT - attacker.col);
         const dr_sign = Math.sign(rT - attacker.row);
@@ -662,76 +663,74 @@ class Game {
 
         const potentialSquares = [];
         if (dr_abs === 2 && dc_abs === 1) { // Vertical L
-            potentialSquares.push({ r: rT - dr_sign, c: cT }); // one step back on long axis
-            potentialSquares.push({ r: rT, c: cT - dc_sign }); // one step back on short axis
+            potentialSquares.push({ r: rT - dr_sign, c: cT });
+            potentialSquares.push({ r: rT, c: cT - dc_sign });
         } else if (dr_abs === 1 && dc_abs === 2) { // Horizontal L
-            potentialSquares.push({ r: rT - dr_sign, c: cT }); // one step back on short axis
-            potentialSquares.push({ r: rT, c: cT - dc_sign }); // one step back on long axis
+            potentialSquares.push({ r: rT - dr_sign, c: cT });
+            potentialSquares.push({ r: rT, c: cT - dc_sign });
         }
 
-        // Filter for squares that are valid and empty
         return potentialSquares.filter(s =>
             this.gameState.isValid(s.r, s.c) && !this.gameState.getPiece(s.r, s.c)
         );
     }
 
-    _calculateAdjacentAttackStagingSquares(attacker, target) {
-        const rA = attacker.row, cA = attacker.col;
-        const rT = target.row, cT = target.col;
-
-        // This logic is for pieces that attack adjacent squares (King, Pawn).
-        // The line of attack is directly from attacker to target.
-        const dr = rT - rA;
-        const dc = cT - cA;
-
-        // The only possible staging square is the one "behind" the target on the same line.
-        const stagingSquare = { r: rT + dr, c: cT + dc };
-
-        if (this.gameState.isValid(stagingSquare.r, stagingSquare.c) && !this.gameState.getPiece(stagingSquare.r, stagingSquare.c)) {
-            return [stagingSquare];
-        }
-
-        return [];
-    }
-
-
     executeAttack(stagingR, stagingC) {
         const { attacker, target } = this.gameState.attackInfo;
         const fromR = attacker.row;
         const fromC = attacker.col;
-        let destroyed = false;
+        const isAdjacentAttack = (attacker.type === 'King' || attacker.type === 'Pawn');
 
-        if (attacker.type !== 'Knight') {
-            destroyed = this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
-        }
-
-        this.gameState.board[fromR][fromC] = null;
-        if (destroyed) {
-            this.completeMove(attacker, true, false);
-            return;
-        }
-
-        this.gameState.board[stagingR][stagingC] = attacker;
-        attacker.row = stagingR;
-        attacker.col = stagingC;
-        attacker.hasMoved = true;
-
-        if (target.hasShield) {
-            target.hasShield = false;
-            this.completeMove(attacker, true, false);
+        if (isAdjacentAttack) {
+            // Adjacent attack: attacker does not move from its square to initiate.
+            if (target.hasShield) {
+                target.hasShield = false;
+                this.completeMove(attacker, true, false);
+            } else {
+                this.gameState.board[target.row][target.col] = null;
+                this.gameState.phase = 'SELECT_RESTING';
+                this.gameState.restingOptions = [{ r: fromR, c: fromC }, { r: target.row, c: target.col }];
+                this.gameState.attackInfo = { attacker };
+                this.gameState.phaseInfo = 'Choose a resting square for your piece.';
+            }
         } else {
-            this.gameState.board[target.row][target.col] = null;
-            this.gameState.phase = 'SELECT_RESTING';
-            this.gameState.restingOptions = [{ r: stagingR, c: stagingC }, { r: target.row, c: target.col }];
-            this.gameState.attackInfo = { attacker };
-            this.gameState.phaseInfo = 'Choose a resting square for your piece.';
+            // Ranged attack: move to the staging square first.
+            let destroyedOnPath = false;
+            if (attacker.type !== 'Knight') {
+                destroyedOnPath = this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
+            }
+
+            this.gameState.board[fromR][fromC] = null;
+            if (destroyedOnPath) {
+                this.completeMove(attacker, true, false);
+                return;
+            }
+
+            this.gameState.board[stagingR][stagingC] = attacker;
+            attacker.row = stagingR;
+            attacker.col = stagingC;
+            attacker.hasMoved = true;
+
+            if (target.hasShield) {
+                target.hasShield = false;
+                this.completeMove(attacker, true, false);
+            } else {
+                this.gameState.board[target.row][target.col] = null;
+                this.gameState.phase = 'SELECT_RESTING';
+                this.gameState.restingOptions = [{ r: stagingR, c: stagingC }, { r: target.row, c: target.col }];
+                this.gameState.attackInfo = { attacker };
+                this.gameState.phaseInfo = 'Choose a resting square for your piece.';
+            }
         }
     }
 
     completeResting(toR, toC) {
         const { attacker } = this.gameState.attackInfo;
-        if (attacker.row !== toR || attacker.col !== toC) {
-            this.gameState.board[attacker.row][attacker.col] = null;
+        const fromR = attacker.row;
+        const fromC = attacker.col;
+
+        if (fromR !== toR || fromC !== toC) {
+            this.gameState.board[fromR][fromC] = null;
             this.gameState.board[toR][toC] = attacker;
             attacker.row = toR;
             attacker.col = toC;
@@ -828,7 +827,10 @@ class Game {
 
     applyPassThroughEffect(movingPiece, staticPiece) {
         if (staticPiece.type === 'Life') {
-            movingPiece.hasShield = true;
+            // Kings and Queens can never gain a shield.
+            if (!['King', 'Queen'].includes(movingPiece.type)) {
+                movingPiece.hasShield = true;
+            }
         } else if (staticPiece.type === 'Death') {
             if (movingPiece.hasShield) {
                 movingPiece.hasShield = false;

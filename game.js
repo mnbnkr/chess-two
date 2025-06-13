@@ -1,4 +1,3 @@
-// game.js
 const BOARD_SIZE = 10;
 const PIECE_SYMBOLS = {
     white: { King: '♔', Queen: '♕', Rook: '♖', Bishop: '♗', Knight: '♘', Pawn: '♙', Life: '❤', Death: '💀' },
@@ -11,7 +10,7 @@ class Piece {
         this.row = row;
         this.col = col;
         this.type = type;
-        this.hasShield = !['King', 'Life', 'Death'].includes(type);
+        this.hasShield = !['King', 'Queen', 'Life', 'Death'].includes(type);
         this.hasMoved = false;
     }
 
@@ -36,22 +35,35 @@ class Pawn extends Piece {
         const moves = [];
         const attacks = [];
         const dir = this.color === 'white' ? -1 : 1;
-        const whiteStartRow = 8;
-        const blackStartRow = 1;
 
-        // 1-square move
+        // 1-square move (always possible if empty)
         if (gameState.isValid(this.row + dir, this.col) && !gameState.getPiece(this.row + dir, this.col)) {
             moves.push({ r: this.row + dir, c: this.col });
         }
-        // Initial 2 or 3 square move
-        if (!this.hasMoved && ((this.color === 'white' && this.row === whiteStartRow) || (this.color === 'black' && this.row === blackStartRow))) {
-            if (moves.length > 0 && gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
-                moves.push({ r: this.row + 2 * dir, c: this.col });
-                if (gameState.isValid(this.row + 3 * dir, this.col) && !gameState.getPiece(this.row + 3 * dir, this.col)) {
-                    moves.push({ r: this.row + 3 * dir, c: this.col });
+
+        // Multi-square forward moves, only if the first square is clear
+        if (moves.length > 0) {
+            const isWhite = this.color === 'white';
+            const startRow = isWhite ? 8 : 1;
+            const oneStepFwdRow = isWhite ? 7 : 2;
+
+            // From starting rank: can move 2 or 3 squares forward
+            if (this.row === startRow) {
+                if (gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
+                    moves.push({ r: this.row + 2 * dir, c: this.col });
+                    if (gameState.isValid(this.row + 3 * dir, this.col) && !gameState.getPiece(this.row + 3 * dir, this.col)) {
+                        moves.push({ r: this.row + 3 * dir, c: this.col });
+                    }
+                }
+            }
+            // From rank after start: can move 2 squares forward
+            else if (this.row === oneStepFwdRow) {
+                if (gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
+                    moves.push({ r: this.row + 2 * dir, c: this.col });
                 }
             }
         }
+
         // Attacks
         [-1, 1].forEach(dCol => {
             if (!gameState.isValid(this.row + dir, this.col + dCol)) return;
@@ -503,7 +515,8 @@ class Game {
             if (canMakeSpecialMove) {
                 validMoves = moves || [];
             }
-            if (canMakeStandardMove) {
+            // A special action requires BOTH move slots to be available.
+            if (canMakeStandardMove && canMakeSpecialMove) {
                 validSpecialActions = specialActions || [];
             }
         }
@@ -531,7 +544,6 @@ class Game {
         this.gameState.stagingOptions = [];
         this.gameState.restingOptions = [];
         this.gameState.attackInfo = null;
-        // phaseInfo is set by the renderer's updateStatus function
         const currentPlayerName = this.gameState.currentPlayer.charAt(0).toUpperCase() + this.gameState.currentPlayer.slice(1);
         this.gameState.phaseInfo = `${currentPlayerName}'s turn. Select a piece to move.`;
     }
@@ -586,9 +598,8 @@ class Game {
             case 'Knight':
                 return this._calculateKnightStagingSquares(attacker, target);
             case 'Pawn':
-                return this._calculatePawnStagingSquares(attacker, target);
             case 'King':
-                return this._calculateKingStagingSquares(attacker, target);
+                return this._calculateAdjacentAttackStagingSquares(attacker, target);
             default:
                 return [];
         }
@@ -601,26 +612,18 @@ class Game {
         const dr = Math.sign(rT - rA);
         const dc = Math.sign(cT - cA);
 
-        const isStraight = (rA === rT || cA === cT) && (dr !== 0 || dc !== 0);
+        const isStraight = (dr === 0 || dc === 0) && (dr !== 0 || dc !== 0);
         const isDiagonal = (Math.abs(rT - rA) === Math.abs(cT - cA));
 
         // Validate direction for the specific piece type
-        if (attacker.type === 'Rook' && !isStraight) return [];
-        if (attacker.type === 'Bishop' && !isDiagonal) return [];
-        if (attacker.type === 'Queen' && !isStraight && !isDiagonal) return [];
-
-        const stagingR = rT - dr;
-        const stagingC = cT - dc;
-
-        // The staging square must be on the board and empty
-        if (!this.gameState.isValid(stagingR, stagingC) || this.gameState.getPiece(stagingR, stagingC)) {
+        if ((attacker.type === 'Rook' && !isStraight) || (attacker.type === 'Bishop' && !isDiagonal)) {
             return [];
         }
 
-        // Check for obstructions between the attacker and the staging square
+        // Check for obstructions between the attacker and the target
         let r = rA + dr;
         let c = cA + dc;
-        while (r !== stagingR || c !== stagingC) {
+        while (r !== rT || c !== cT) {
             const piece = this.gameState.getPiece(r, c);
             if (piece && piece.type !== 'Life' && piece.type !== 'Death') {
                 return []; // Path is blocked
@@ -629,28 +632,41 @@ class Game {
             c += dc;
         }
 
-        // Path to staging square is clear, and staging square itself is empty.
-        return [{ r: stagingR, c: stagingC }];
+        // Path is clear. Check for empty staging squares adjacent to target on the line of attack.
+        const potentialSquares = [
+            { r: rT - dr, c: cT - dc }, // Square "in front" of target
+            { r: rT + dr, c: cT + dc }  // Square "behind" target
+        ];
+
+        return potentialSquares.filter(s =>
+            (s.r !== rA || s.c !== cA) && // Cannot stage on attacker's current square
+            this.gameState.isValid(s.r, s.c) &&
+            !this.gameState.getPiece(s.r, s.c)
+        );
     }
 
     _calculateKnightStagingSquares(attacker, target) {
-        const rA = attacker.row, cA = attacker.col;
         const rT = target.row, cT = target.col;
 
-        const dr = rT - rA;
-        const dc = cT - cA;
+        // Potential staging squares are the 8 locations from which a Knight can jump TO the target.
+        // We then filter these to only squares adjacent to the target, per the special Knight rule.
+        // The rule example: Knight on c2 attacks d4, staging squares are c4 and d3.
+        // Let's analyze this specific transformation.
+        // Attack vector (c2->d4) is (+1 col, +2 row) -> (dc=1, dr=2) assuming a1=0,0 bottom-left.
+        // Staging squares (c4, d3) are (target_c-1, target_r) and (target_c, target_r-1).
+        // Let's use board coordinates (0,0 top-left). Attacker (rA,cA), Target(rT,cT).
+        const dr_abs = Math.abs(rT - attacker.row);
+        const dc_abs = Math.abs(cT - attacker.col);
+        const dr_sign = Math.sign(rT - attacker.row);
+        const dc_sign = Math.sign(cT - attacker.col);
 
         const potentialSquares = [];
-
-        if (Math.abs(dr) === 2 && Math.abs(dc) === 1) {
-            // "Vertical L" move: 2 squares row-wise, 1 square col-wise.
-            // Based on the rule example, the staging squares are the "corners" of the L-path.
-            potentialSquares.push({ r: rT - dr / 2, c: cT }); // The square one step towards attacker on the long axis.
-            potentialSquares.push({ r: rT, c: cT - dc });     // The square adjacent to target on the short axis.
-        } else if (Math.abs(dr) === 1 && Math.abs(dc) === 2) {
-            // "Horizontal L" move: 1 square row-wise, 2 squares col-wise.
-            potentialSquares.push({ r: rT - dr, c: cT });     // The square adjacent to target on the short axis.
-            potentialSquares.push({ r: rT, c: cT - dc / 2 }); // The square one step towards attacker on the long axis.
+        if (dr_abs === 2 && dc_abs === 1) { // Vertical L
+            potentialSquares.push({ r: rT - dr_sign, c: cT }); // one step back on long axis
+            potentialSquares.push({ r: rT, c: cT - dc_sign }); // one step back on short axis
+        } else if (dr_abs === 1 && dc_abs === 2) { // Horizontal L
+            potentialSquares.push({ r: rT - dr_sign, c: cT }); // one step back on short axis
+            potentialSquares.push({ r: rT, c: cT - dc_sign }); // one step back on long axis
         }
 
         // Filter for squares that are valid and empty
@@ -659,44 +675,25 @@ class Game {
         );
     }
 
-    _calculatePawnStagingSquares(attacker, target) {
-        // For a pawn, the "line of attack" is ambiguous. A reasonable interpretation is that the
-        // staging square is the empty square directly in front of the pawn, on the target's rank.
-        // This square is adjacent to the target and maintains the pawn's forward momentum.
-        const stagingR = target.row;
-        const stagingC = attacker.col;
-
-        // The staging square must be empty.
-        if (this.gameState.isValid(stagingR, stagingC) && !this.gameState.getPiece(stagingR, stagingC)) {
-            return [{ r: stagingR, c: stagingC }];
-        }
-        return [];
-    }
-
-    _calculateKingStagingSquares(attacker, target) {
+    _calculateAdjacentAttackStagingSquares(attacker, target) {
         const rA = attacker.row, cA = attacker.col;
         const rT = target.row, cT = target.col;
 
-        const potentialSquares = [
-            { r: rT, c: cA }, // Square on target's rank, attacker's file
-            { r: rA, c: cT }  // Square on attacker's rank, target's file
-        ];
+        // This logic is for pieces that attack adjacent squares (King, Pawn).
+        // The line of attack is directly from attacker to target.
+        const dr = rT - rA;
+        const dc = cT - cA;
 
-        // Filter for unique, valid, and empty squares.
-        const stagingSquares = [];
-        const seen = new Set();
-        for (const s of potentialSquares) {
-            // Don't stage on the attacker's starting square
-            if (s.r === rA && s.c === cA) continue;
+        // The only possible staging square is the one "behind" the target on the same line.
+        const stagingSquare = { r: rT + dr, c: cT + dc };
 
-            const key = `${s.r},${s.c}`;
-            if (!seen.has(key) && this.gameState.isValid(s.r, s.c) && !this.gameState.getPiece(s.r, s.c)) {
-                stagingSquares.push(s);
-                seen.add(key);
-            }
+        if (this.gameState.isValid(stagingSquare.r, stagingSquare.c) && !this.gameState.getPiece(stagingSquare.r, stagingSquare.c)) {
+            return [stagingSquare];
         }
-        return stagingSquares;
+
+        return [];
     }
+
 
     executeAttack(stagingR, stagingC) {
         const { attacker, target } = this.gameState.attackInfo;
@@ -766,7 +763,9 @@ class Game {
             this.gameState.turn.standardMoveMade = true;
         } else { // Life or Death piece
             if (isSpecialAction) {
+                // Special actions for Life/Death consume both move slots for the turn.
                 this.gameState.turn.standardMoveMade = true;
+                this.gameState.turn.specialMoveMade = true;
             } else if (pieceMoved) {
                 this.gameState.turn.specialMoveMade = true;
             }
@@ -802,7 +801,8 @@ class Game {
 
                 if (moveType === 'standard') {
                     if (!isLifeDeath && ((moves && moves.length > 0) || (attacks && attacks.length > 0))) return true;
-                    if (isLifeDeath && specialActions && specialActions.length > 0) return true;
+                    // A special action requires both slots, so we must check both here.
+                    if (isLifeDeath && specialActions && specialActions.length > 0 && !this.gameState.turn.specialMoveMade) return true;
                 } else if (moveType === 'special') {
                     if (isLifeDeath && moves && moves.length > 0) return true;
                 }
@@ -852,7 +852,7 @@ class Game {
             for (let j = i + 1; j < lifeDeathPieces.length; j++) {
                 const p1 = lifeDeathPieces[i];
                 const p2 = lifeDeathPieces[j];
-                if (p1.type !== p2.type && Math.max(Math.abs(p1.row - p2.row), Math.abs(p1.col - p2.col)) === 1) {
+                if (p1.type !== p2.type && Math.abs(p1.row - p2.row) <= 1 && Math.abs(p1.col - p2.col) <= 1 && (p1.row === p2.row || p1.col === p2.col)) {
                     toRemove.add(p1);
                     toRemove.add(p2);
                 }

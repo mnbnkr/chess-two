@@ -42,10 +42,8 @@ class Pawn extends Piece {
         const oneStepFwd = { r: this.row + dir, c: this.col };
         if (gameState.isValid(oneStepFwd.r, oneStepFwd.c)) {
             const pieceAtOne = gameState.getPiece(oneStepFwd.r, oneStepFwd.c);
-            if (!pieceAtOne) {
+            if (!pieceAtOne || pieceAtOne.type === 'Death') {
                 moves.push(oneStepFwd);
-            } else if (pieceAtOne.type === 'Death') {
-                moves.push({ ...oneStepFwd, isSuicideMove: true });
             }
         }
 
@@ -54,24 +52,22 @@ class Pawn extends Piece {
                 const p = gameState.getPiece(r, c);
                 return !p || ['Life', 'Death'].includes(p.type);
             };
-            const isEmpty = (r, c) => !gameState.getPiece(r, c);
-            const isDeath = (r, c) => gameState.getPiece(r, c)?.type === 'Death';
+            const isEmptyOrDeath = (r, c) => {
+                const p = gameState.getPiece(r, c);
+                return !p || p.type === 'Death';
+            };
 
             const twoStepsFwd = { r: this.row + 2 * dir, c: this.col };
             if (gameState.isValid(twoStepsFwd.r, twoStepsFwd.c) && canPass(this.row + dir, this.col)) {
-                if (isEmpty(twoStepsFwd.r, twoStepsFwd.c)) {
+                if (isEmptyOrDeath(twoStepsFwd.r, twoStepsFwd.c)) {
                     moves.push(twoStepsFwd);
-                } else if (isDeath(twoStepsFwd.r, twoStepsFwd.c)) {
-                    moves.push({ ...twoStepsFwd, isSuicideMove: true });
                 }
             }
 
             const threeStepsFwd = { r: this.row + 3 * dir, c: this.col };
             if (this.row === startPos && gameState.isValid(threeStepsFwd.r, threeStepsFwd.c) && canPass(this.row + dir, this.col) && canPass(this.row + 2 * dir, this.col)) {
-                if (isEmpty(threeStepsFwd.r, threeStepsFwd.c)) {
+                if (isEmptyOrDeath(threeStepsFwd.r, threeStepsFwd.c)) {
                     moves.push(threeStepsFwd);
-                } else if (isDeath(threeStepsFwd.r, threeStepsFwd.c)) {
-                    moves.push({ ...threeStepsFwd, isSuicideMove: true });
                 }
             }
         } else if (this.row === (this.color === 'white' ? 7 : 2)) { // After a 1-square first move
@@ -79,15 +75,15 @@ class Pawn extends Piece {
                 const p = gameState.getPiece(r, c);
                 return !p || ['Life', 'Death'].includes(p.type);
             };
-            const isEmpty = (r, c) => !gameState.getPiece(r, c);
-            const isDeath = (r, c) => gameState.getPiece(r, c)?.type === 'Death';
+            const isEmptyOrDeath = (r, c) => {
+                const p = gameState.getPiece(r, c);
+                return !p || p.type === 'Death';
+            };
 
             const twoStepsFwd = { r: this.row + 2 * dir, c: this.col };
             if (gameState.isValid(twoStepsFwd.r, twoStepsFwd.c) && canPass(this.row + dir, this.col)) {
-                if (isEmpty(twoStepsFwd.r, twoStepsFwd.c)) {
+                if (isEmptyOrDeath(twoStepsFwd.r, twoStepsFwd.c)) {
                     moves.push(twoStepsFwd);
-                } else if (isDeath(twoStepsFwd.r, twoStepsFwd.c)) {
-                    moves.push({ ...twoStepsFwd, isSuicideMove: true });
                 }
             }
         }
@@ -131,7 +127,7 @@ class Rook extends Piece {
                         continue; // Pass through Life
                     }
                     if (piece.type === 'Death') {
-                        moves.push({ r, c, isSuicideMove: true });
+                        moves.push({ r, c }); // Allow move onto Death square
                         continue; // Can also pass through Death
                     }
                     if (piece.owner !== this.owner) {
@@ -175,7 +171,7 @@ class King extends Piece {
                     if (!piece) {
                         moves.push({ r, c });
                     } else if (piece.type === 'Death') {
-                        moves.push({ r, c, isSuicideMove: true });
+                        moves.push({ r, c });
                     } else if (piece.owner !== this.owner && piece.type !== 'Life') {
                         attacks.push({ r, c });
                     }
@@ -199,7 +195,7 @@ class Knight extends Piece {
                 if (!piece) {
                     moves.push({ r, c });
                 } else if (piece.type === 'Death') {
-                    moves.push({ r, c, isSuicideMove: true });
+                    moves.push({ r, c });
                 } else if (piece.owner !== this.owner && piece.type !== 'Life') {
                     attacks.push({ r, c });
                 }
@@ -223,8 +219,11 @@ class Knight extends Piece {
 
                     const rampPiece = gameState.getPiece(rampR, rampC);
                     if (rampPiece && !['Life', 'Death'].includes(rampPiece.type)) {
-                        if (gameState.isValid(landR, landC) && !gameState.getPiece(landR, landC)) {
-                            singleJumps.push({ r: landR, c: landC });
+                        if (gameState.isValid(landR, landC)) {
+                            const landingPiece = gameState.getPiece(landR, landC);
+                            if (!landingPiece || landingPiece.type === 'Death') {
+                                singleJumps.push({ r: landR, c: landC });
+                            }
                         }
                     }
                 }
@@ -269,7 +268,8 @@ class Life extends Piece {
                 if (!pieceAtTarget) {
                     moves.push({ r, c });
                 } else {
-                    if (!pieceAtTarget.hasShield && !['King', 'Queen', 'Life', 'Death'].includes(pieceAtTarget.type)) {
+                    // Allow healing (to grant immunity) any valid piece that is not already immune.
+                    if (!pieceAtTarget.isImmune && !['King', 'Queen', 'Life', 'Death'].includes(pieceAtTarget.type)) {
                         specialActions.push({ r, c, type: 'heal' });
                     }
                 }
@@ -584,29 +584,48 @@ class Game {
         const fromC = piece.col;
         let destroyed = false;
 
-        if (moveInfo?.isSuicideMove) {
-            this.checkPassThrough(piece, fromR, fromC, toR, toC);
+        // Check for effects of passing through pieces en route to destination.
+        if (moveInfo?.isSpecialJump) {
+            destroyed = this.applyPassThroughEffect(piece, moveInfo.jumpedPiece);
+        } else {
+            if (piece.type === 'Knight') {
+                if (!moveInfo?.isRampJump) { // Only for L-shaped moves
+                    destroyed = this.checkKnightPassThrough(piece, fromR, fromC, toR, toC);
+                }
+            } else { // For all other non-special-jump moves (sliding, pawn, king)
+                destroyed = this.checkPassThrough(piece, fromR, fromC, toR, toC);
+            }
+        }
+
+        if (destroyed) {
             this.gameState.board[fromR][fromC] = null;
             this.completeMove(piece, true, false);
             return;
         }
 
-        if (moveInfo?.isSpecialJump) {
-            destroyed = this.applyPassThroughEffect(piece, moveInfo.jumpedPiece);
-        } else {
-            if (piece.type === 'Knight') {
-                destroyed = this.checkKnightPassThrough(piece, fromR, fromC, toR, toC);
-            } else {
-                destroyed = this.checkPassThrough(piece, fromR, fromC, toR, toC);
+        // Now, handle the effect of the destination square itself.
+        const destPiece = this.gameState.getPiece(toR, toC);
+        let landedOnDeath = false;
+        if (destPiece && destPiece.type === 'Death') {
+            landedOnDeath = true;
+            if (this.applyPassThroughEffect(piece, destPiece)) {
+                destroyed = true; // Piece is destroyed by landing on Death.
             }
         }
 
+        // Move piece from old square.
         this.gameState.board[fromR][fromC] = null;
-        if (!destroyed) {
+
+        if (destroyed || landedOnDeath) {
+            // If piece was destroyed OR landed on Death and survived (lost shield),
+            // it is removed from the board. Death piece at destination remains untouched.
+        } else {
+            // Normal move to an unoccupied square.
             this.gameState.board[toR][toC] = piece;
             piece.row = toR;
             piece.col = toC;
         }
+
         piece.hasMoved = true;
         this.completeMove(piece, true, false);
     }
@@ -754,11 +773,8 @@ class Game {
             const stagedOnDeath = pieceAtStaging?.type === 'Death';
             let destroyedOnPath = false;
 
-            if (attacker.type === 'Knight') {
-                destroyedOnPath = this.checkKnightPassThrough(attacker, fromR, fromC, stagingR, stagingC);
-            } else {
-                destroyedOnPath = this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
-            }
+            // For any ranged attack, check the path from the attacker's start to the staging square.
+            destroyedOnPath = this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
 
             this.gameState.board[fromR][fromC] = null;
             if (destroyedOnPath) {
@@ -973,6 +989,9 @@ class Game {
     }
 
     applyPassThroughEffect(movingPiece, staticPiece) {
+        if (movingPiece.isImmune) {
+            return false; // Immune pieces are not affected.
+        }
         if (staticPiece.type === 'Life') {
             if (!['King', 'Queen'].includes(movingPiece.type)) {
                 movingPiece.hasShield = true;

@@ -14,6 +14,7 @@ class Piece {
         this.hasShield = !['King', 'Queen', 'Life', 'Death'].includes(type);
         this.hasMoved = false;
         this.isImmune = false;
+        this.immunityGrantedBy = null;
         this.isIntimidated = false;
     }
 
@@ -294,7 +295,8 @@ class Death extends Piece {
                     moves.push({ r, c });
                 }
                 const target = gameState.getPiece(r, c);
-                if (target && !this._isProtected(target, gameState)) {
+                // The kill action is only possible if the target is not another Death piece.
+                if (target && target.type !== 'Death' && !this._isProtected(target, gameState)) {
                     specialActions.push({ r, c, type: 'kill' });
                 }
             }
@@ -304,11 +306,22 @@ class Death extends Piece {
 
     _isProtected(piece, gameState) {
         const { row, col } = piece;
-        const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+        const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]]; // horizontal and vertical
         for (const [dr, dc] of directions) {
-            const protector = gameState.getPiece(row + dr, col + dc);
-            if (protector && protector.owner === piece.owner && protector !== piece) {
-                return true;
+            const protectorR = row + dr;
+            const protectorC = col + dc;
+
+            if (gameState.isValid(protectorR, protectorC)) {
+                // A square is light if (r + c) is odd.
+                const isLightSquare = (protectorR + protectorC) % 2 !== 0;
+
+                if (isLightSquare) {
+                    const protector = gameState.getPiece(protectorR, protectorC);
+                    // Check for an ally on that light square
+                    if (protector && protector.owner === piece.owner && protector !== piece) {
+                        return true; // Protected by an ally on an adjacent light square.
+                    }
+                }
             }
         }
         return false;

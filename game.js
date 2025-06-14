@@ -458,6 +458,7 @@ class Game {
             if (target) {
                 target.hasShield = true;
                 target.isImmune = true;
+                target.immunityGrantedBy = piece.owner;
             }
             this.completeMove(piece, false, true);
         } else if (action.type === 'kill') {
@@ -502,12 +503,14 @@ class Game {
             this.gameState.currentPlayer = this.gameState.currentPlayer === 'white' ? 'black' : 'white';
             this.gameState.turn = { standardMoveMade: false, specialMoveMade: false };
 
-            // Clear immunity for the new current player's pieces at the start of their turn.
+            const newCurrentPlayer = this.gameState.currentPlayer;
+            // At the start of the new player's turn, clear immunity that they themselves granted on their previous turn.
             for (let r = 0; r < BOARD_SIZE; r++) {
                 for (let c = 0; c < BOARD_SIZE; c++) {
                     const p = this.gameState.getPiece(r, c);
-                    if (p && p.owner === this.gameState.currentPlayer && p.isImmune) {
+                    if (p && p.isImmune && p.immunityGrantedBy === newCurrentPlayer) {
                         p.isImmune = false;
+                        p.immunityGrantedBy = null;
                     }
                 }
             }

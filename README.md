@@ -41,7 +41,7 @@ The turn is not over until the player has made all possible moves (MUST make the
 
 *   **King:**
     *   **Health:** The King has only 1 life and can never have a Shield.
-    *   **Intimidation:** When an opponent's move places the King in check, the piece or pieces delivering the check immediately lose their Shield (if they had one).
+    *   **Intimidation:** When an opponent's move places the King in check, the piece or pieces delivering the check immediately lose their Shield (if they had one). The checking piece will get back its Shield when it no longer checks the King.
 
 *   **Queen:**
     *   **Health:** The Queen has only 1 life and can never have a Shield.

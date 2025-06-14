@@ -1,8 +1,6 @@
-// Imports from new modules
 import { Pawn, Rook, Knight, Bishop, Queen, King, Life, Death } from './pieces.js';
 import { Renderer, InputHandler } from './ui.js';
 
-// Export the constant so other modules can use it
 export const BOARD_SIZE = 10;
 
 // Keep the piece classes in a map for easy instantiation in createInitialBoard
@@ -345,47 +343,65 @@ class Game {
                 };
                 this.gameState.phaseInfo = 'Choose a resting square for your piece.';
             }
-        } else { // Ranged attack
+        } else { // Ranged attack - REWORKED LOGIC
             const pieceAtStaging = this.gameState.getPiece(stagingR, stagingC);
             const stagedOnDeath = pieceAtStaging?.type === 'Death';
-            let destroyedOnPath = false;
+            const targetOriginalPos = { r: target.row, c: target.col };
 
-            // For any ranged attack, check the path from the attacker's start to the staging square.
-            destroyedOnPath = this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
+            // 1. Calculate destruction on the path to the staging square (path does not include the staging square itself).
+            const destroyedOnPath = this.checkPassThrough(attacker, fromR, fromC, stagingR, stagingC);
 
-            this.gameState.board[fromR][fromC] = null;
+            // 2. Resolve the attack on the target FIRST.
+            const killedTarget = !target.hasShield;
+            if (killedTarget) {
+                this.gameState.board[targetOriginalPos.r][targetOriginalPos.c] = null;
+            } else {
+                target.hasShield = false;
+            }
+
+            // 3. Determine the attacker's fate.
+            this.gameState.board[fromR][fromC] = null; // Attacker always leaves its starting square.
+
             if (destroyedOnPath) {
+                // Attacker was destroyed by a piece on the path. The move ends.
                 this.completeMove(attacker, true, false);
                 return;
             }
 
-            // To prevent the Death piece from being overwritten, we only update the attacker's
-            // logical position. It is only physically placed on the board if the square is empty.
-            if (!stagedOnDeath) {
-                this.gameState.board[stagingR][stagingC] = attacker;
-            }
+            // Attacker survived the path. Now, deal with the staging square itself.
             attacker.row = stagingR;
             attacker.col = stagingC;
             attacker.hasMoved = true;
 
-            if (target.hasShield) {
-                target.hasShield = false;
-                // If the attacker staged on a Death square, its move ends here. The pass-through
-                // effect removed its shield, making a "rest" on the Death square lethal.
-                // Since it was never placed on the board, it is effectively removed.
-                this.completeMove(attacker, true, false);
+            if (stagedOnDeath) {
+                // Staging on a Death square has consequences.
+                if (this.applyPassThroughEffect(attacker, pieceAtStaging)) {
+                    // Attacker is destroyed by landing on the Death square. Move ends.
+                    this.completeMove(attacker, true, false);
+                    return;
+                }
+                // If it survived (had a shield), it rests "logically" on the Death square but is not placed on the board.
             } else {
-                // The target is unshielded and will be removed. Proceed to resting phase.
-                this.gameState.board[target.row][target.col] = null;
+                // Staging square was empty, so physically place the attacker there.
+                this.gameState.board[stagingR][stagingC] = attacker;
+            }
+
+            // 4. Decide the next game phase.
+            if (killedTarget) {
+                // Target was killed and attacker survived. Proceed to the resting phase.
                 this.gameState.phase = 'SELECT_RESTING';
-                this.gameState.restingOptions = [{ r: stagingR, c: stagingC }, { r: target.row, c: target.col }];
+                this.gameState.restingOptions = [{ r: stagingR, c: stagingC }, { r: targetOriginalPos.r, c: targetOriginalPos.c }];
                 this.gameState.attackInfo = {
                     attacker: attacker,
                     isAdjacent: false,
                     stagedOnDeath: stagedOnDeath,
                     deathPiece: pieceAtStaging,
+                    targetSquare: targetOriginalPos
                 };
-                this.gameState.phaseInfo = 'Choose a resting square for your piece.';
+                this.gameState.phaseInfo = 'Choose a resting square for your attacker.';
+            } else {
+                // Target was only de-shielded. Attacker's move is over and it rests on the staging square.
+                this.completeMove(attacker, true, false);
             }
         }
     }
@@ -521,22 +537,24 @@ class Game {
 
     checkPassThrough(piece, r1, c1, r2, c2) {
         if (r1 === r2 && c1 === c2) return false;
-        const dr = Math.sign(r2 - r1), dc = Math.sign(c2 - c1);
+        const dr = Math.sign(r2 - r1);
+        const dc = Math.sign(c2 - c1);
         if (dr === 0 && dc === 0) return false;
-        let r = r1 + dr, c = c1 + dc;
-        let currentR = r, currentC = c;
-        const endR = r2 + dr, endC = c2 + dc;
 
-        while (currentR !== endR || currentC !== endC) {
+        let r = r1 + dr;
+        let c = c1 + dc;
+
+        // Loop only through squares *between* start (r1, c1) and end (r2, c2).
+        while (r !== r2 || c !== c2) {
+            if (!this.gameState.isValid(r, c)) break;
             const p = this.gameState.getPiece(r, c);
             if (p && (p.type === 'Life' || p.type === 'Death')) {
-                if (this.applyPassThroughEffect(piece, p)) return true;
+                if (this.applyPassThroughEffect(piece, p)) return true; // Piece destroyed en-route
             }
-            if (r === r2 && c === c2) break;
-            r += dr; c += dc;
-            currentR = r; currentC = c;
+            r += dr;
+            c += dc;
         }
-        return false;
+        return false; // Piece survived the path
     }
 
     checkKnightPassThrough(piece, r1, c1, r2, c2) {
@@ -658,5 +676,4 @@ class Game {
     }
 }
 
-// Entry point
 document.addEventListener('DOMContentLoaded', () => new Game());

@@ -31,7 +31,7 @@ The turn is not over until the player has made all possible moves (MUST make the
 *   **Pawn:**
     *   **First Move:** A Pawn that has not yet moved can advance 1, 2, or 3 empty squares forward. If a Pawn has only moved 1 square (or is on rank 3 for Black or 8 for White) - it can still advance 1 or 2 empty squares forward.
     *   **Special Jump:** If a Pawn on the opponent's side of the board is directly blocked by an opponent's Life or Death piece, it may jump over that piece to the empty square immediately behind it. This jump triggers the "Pass-Through Effect" of the jumped piece.
-        *   **Example:** A White Pawn is on d6, and an opponent's Death piece is on d7. If d8 is empty, the Pawn can jump from d6 to d8. Upon landing, the Pawn loses its shield (or life) due to passing through Death.
+        *   **Example:** A White Pawn is on `d6`, and an opponent's Death piece is on `d7`. If `d8` is empty, the Pawn can jump from `d6` to `d8`. Upon landing, the Pawn loses its shield (or life) due to passing through Death.
 
 *   **Knight:**
     *   The Knight has two mutually exclusive move types for its "Standard Move."
@@ -43,7 +43,7 @@ The turn is not over until the player has made all possible moves (MUST make the
     *   **Health:** The King has only 1 life and can never have a Shield.
     *   **Intimidation:** When an opponent's move places the King in check, the piece or pieces delivering the check immediately lose their Shield (if they had one).
 
-    **Queen:**
+*   **Queen:**
     *   **Health:** The Queen has only 1 life and can never have a Shield.
 
 *   **Life & Death Pieces:**

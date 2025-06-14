@@ -98,10 +98,13 @@ class Pawn extends Piece {
         });
 
         // Special Jump over Life/Death
-        const blockingPiece = gameState.getPiece(this.row + dir, this.col);
-        if (blockingPiece && (blockingPiece.type === 'Life' || blockingPiece.type === 'Death') && blockingPiece.owner !== this.owner) {
-            if (gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
-                moves.push({ r: this.row + 2 * dir, c: this.col, isSpecialJump: true, jumpedPiece: blockingPiece });
+        const onOpponentSide = (this.color === 'white' && this.row <= 4) || (this.color === 'black' && this.row >= 5);
+        if (onOpponentSide) {
+            const blockingPiece = gameState.getPiece(this.row + dir, this.col);
+            if (blockingPiece && (blockingPiece.type === 'Life' || blockingPiece.type === 'Death') && blockingPiece.owner !== this.owner) {
+                if (gameState.isValid(this.row + 2 * dir, this.col) && !gameState.getPiece(this.row + 2 * dir, this.col)) {
+                    moves.push({ r: this.row + 2 * dir, c: this.col, isSpecialJump: true, jumpedPiece: blockingPiece });
+                }
             }
         }
         return { moves, attacks, specialActions: [] };

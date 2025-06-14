@@ -240,6 +240,12 @@ class Knight extends Piece {
         firstJumps.forEach(jump => rampDestinations.add(`${jump.r},${jump.c}`));
 
         firstJumps.forEach(jump1 => {
+            const intermediatePiece = gameState.getPiece(jump1.r, jump1.c);
+            // A chained jump cannot be initiated from a square occupied by a Death piece.
+            if (intermediatePiece && intermediatePiece.type === 'Death') {
+                return; // Skip this jump1 as a potential intermediate step.
+            }
+
             const secondJumps = _findSingleRampJumps(jump1.r, jump1.c);
             secondJumps.forEach(jump2 => {
                 if (`${jump2.r},${jump2.c}` !== originalPosKey) {

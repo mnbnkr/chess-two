@@ -23,6 +23,7 @@ This is an unfinished 'draft repository'.
 A player's turn consists of up to two distinct moves, which can be performed in any order:
 1.  **One Standard Move:** A single move with any standard piece (Pawn, Rook, Knight, Bishop, Queen, King).
 2.  **One Special Move:** A single move with either a Life or a Death piece that you currently control.
+    *   **One Special Life/Death Action** that uses up all other moves this turn (described below).
 
 The turn is not over until the player has made all possible moves (MUST make these moves if possible). This two-move structure prevents stalemate as long as a Life or Death piece can be moved.
 

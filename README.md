@@ -10,7 +10,7 @@ This is an unfinished 'draft repository'.
 #### **1. Board & Initial Setup**
 
 *   **Board:** A 10x10 grid with alternating dark and light squares.
-*   **Piece Health (Shields):** All pieces, **except for the King, Life, and Death pieces**, begin the game with one "Shield."
+*   **Piece Health (Shields):** All pieces, **except for the King, Queen, Life, and Death pieces**, begin the game with one "Shield."
     *   A piece with a Shield can withstand one attack. The first attack removes the Shield.
     *   The second attack on a now-shieldless piece removes it from the board.
 *   **Initial Layout:**

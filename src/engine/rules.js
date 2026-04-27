@@ -52,6 +52,8 @@ export function actionKey(action) {
         action.rest ? squareKey(action.rest) : '',
         action.promotionType ?? '',
         action.rookId ?? '',
+        action.deathLanding ? 'deathLanding' : '',
+        rampSequenceKey(action.rampSequence),
     ];
     return bits.join('|');
 }
@@ -159,10 +161,12 @@ function generatePawnMoves(state, piece) {
     for (let step = 1; step <= maxStep; step++) {
         const to = { r: piece.row + dir * step, c: piece.col };
         if (!isValidSquare(to.r, to.c)) continue;
-        if (getPiece(state.board, to.r, to.c)) continue;
+        const occupant = getPiece(state.board, to.r, to.c);
+        const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+        if (occupant && !deathLanding) continue;
         if (step === 3 && piece.row !== startRow) continue;
         if (!isPawnForwardPathPassable(state, piece, step)) continue;
-        actions.push(...promotionVariants(state, piece, {
+        const action = {
             kind: 'move',
             mode: 'pawnAdvance',
             pieceId: piece.id,
@@ -170,14 +174,16 @@ function generatePawnMoves(state, piece) {
             from: { r: piece.row, c: piece.col },
             to,
             path: pawnPath(piece, step),
+            deathLanding,
             consumes: { standard: true, special: false },
-            enPassantOpportunity: step > 1 ? {
+            enPassantOpportunity: !deathLanding && step > 1 ? {
                 from: { r: piece.row, c: piece.col },
                 to,
                 crossed: pawnPath(piece, step),
                 eligibleColor: oppositeColor(piece.color),
             } : null,
-        }));
+        };
+        actions.push(...(deathLanding ? [action] : promotionVariants(state, piece, action)));
     }
 
     const jumpTo = { r: piece.row + dir * 2, c: piece.col };
@@ -234,7 +240,21 @@ function generateSlidingMoves(state, piece, directions) {
             if (!isValidSquare(to.r, to.c)) break;
             const occupant = getPiece(state.board, to.r, to.c);
             if (occupant) {
-                if (LIFE_DEATH_PIECES.has(occupant.type)) continue;
+                if (occupant.type === PIECE_TYPES.DEATH) {
+                    actions.push(withActionId({
+                        kind: 'move',
+                        mode: 'slide',
+                        pieceId: piece.id,
+                        pieceType: piece.type,
+                        from: { r: piece.row, c: piece.col },
+                        to,
+                        path: linePath({ r: piece.row, c: piece.col }, to),
+                        deathLanding: true,
+                        consumes: { standard: true, special: false },
+                    }));
+                    continue;
+                }
+                if (occupant.type === PIECE_TYPES.LIFE) continue;
                 break;
             }
             actions.push(withActionId({
@@ -259,7 +279,9 @@ function generateKingMoves(state, piece) {
             if (dr === 0 && dc === 0) continue;
             const to = { r: piece.row + dr, c: piece.col + dc };
             if (!isValidSquare(to.r, to.c)) continue;
-            if (getPiece(state.board, to.r, to.c)) continue;
+            const occupant = getPiece(state.board, to.r, to.c);
+            const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+            if (occupant && !deathLanding) continue;
             actions.push(withActionId({
                 kind: 'move',
                 mode: 'kingStep',
@@ -268,6 +290,7 @@ function generateKingMoves(state, piece) {
                 from: { r: piece.row, c: piece.col },
                 to,
                 path: [],
+                deathLanding,
                 consumes: { standard: true, special: false },
             }));
         }
@@ -280,7 +303,9 @@ function generateKnightMoves(state, piece) {
     for (const [dr, dc] of KNIGHT_DELTAS) {
         const to = { r: piece.row + dr, c: piece.col + dc };
         if (!isValidSquare(to.r, to.c)) continue;
-        if (getPiece(state.board, to.r, to.c)) continue;
+        const occupant = getPiece(state.board, to.r, to.c);
+        const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+        if (occupant && !deathLanding) continue;
         actions.push(withActionId({
             kind: 'move',
             mode: 'knightStep',
@@ -289,6 +314,7 @@ function generateKnightMoves(state, piece) {
             from: { r: piece.row, c: piece.col },
             to,
             path: knightPassThroughSquares(piece, to),
+            deathLanding,
             consumes: { standard: true, special: false },
         }));
     }
@@ -312,8 +338,21 @@ function generateKnightMoves(state, piece) {
 
 function knightRampDestinations(state, piece) {
     const results = [];
-    const seen = new Set();
+    const seenRoutes = new Set();
     const original = { r: piece.row, c: piece.col };
+
+    const pushRoute = (land, sequence) => {
+        const key = rampSequenceKey(sequence);
+        if (seenRoutes.has(key)) return;
+        seenRoutes.add(key);
+        results.push({
+            ...land,
+            sequence: sequence.map((step) => ({
+                ramp: { ...step.ramp },
+                land: { ...step.land },
+            })),
+        });
+    };
 
     const singleJumps = (from, visited) => {
         const jumps = [];
@@ -336,24 +375,14 @@ function knightRampDestinations(state, piece) {
     const firstVisited = new Set([squareKey(original)]);
     for (const first of singleJumps(original, firstVisited)) {
         const firstKey = squareKey(first.land);
-        if (!seen.has(firstKey)) {
-            seen.add(firstKey);
-            results.push({ ...first.land, sequence: [{ ramp: first.ramp, land: first.land }] });
-        }
+        pushRoute(first.land, [{ ramp: first.ramp, land: first.land }]);
 
         const secondVisited = new Set([squareKey(original), firstKey]);
         for (const second of singleJumps(first.land, secondVisited)) {
-            const secondKey = squareKey(second.land);
-            if (!seen.has(secondKey)) {
-                seen.add(secondKey);
-                results.push({
-                    ...second.land,
-                    sequence: [
-                        { ramp: first.ramp, land: first.land },
-                        { ramp: second.ramp, land: second.land },
-                    ],
-                });
-            }
+            pushRoute(second.land, [
+                { ramp: first.ramp, land: first.land },
+                { ramp: second.ramp, land: second.land },
+            ]);
         }
     }
     return results;
@@ -702,7 +731,7 @@ function applyMoveAction(state, action) {
     setPiece(state.board, piece.row, piece.col, null);
     piece.hasMoved = true;
 
-    if (destroyed) {
+    if (destroyed || action.deathLanding) {
         removePiece(state, piece);
         return;
     }
@@ -988,6 +1017,10 @@ function dedupeActions(actions) {
         seen.add(key);
         return true;
     });
+}
+
+function rampSequenceKey(sequence = []) {
+    return sequence.map((step) => `${squareKey(step.ramp)}>${squareKey(step.land)}`).join(';');
 }
 
 export function sortActions(actions) {

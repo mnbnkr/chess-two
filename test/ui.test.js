@@ -12,6 +12,7 @@ import {
 } from '../src/engine/index.js';
 import { GameController } from '../src/ui/controller.js';
 import { Renderer, emptyHighlights } from '../src/ui/renderer.js';
+import { ANIMATION_TIMING, BoardAnimator, moveAnimationDurationForAction } from '../src/ui/animation.js';
 import { aiLabelForLevel, aiOptionsForLevel, loadSettings, saveSettings } from '../src/ui/settings.js';
 
 class FakeElement {
@@ -472,6 +473,196 @@ test('renderer distinguishes knight ramp highlights from ordinary moves', () => 
     globalThis.document = previousDocument;
 });
 
+test('renderer dims the selected origin during rest choice unless it is restable', () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+    };
+
+    const state = createEmptyState(COLORS.WHITE);
+    const rook = placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 5, 1, { id: 'rook' }));
+    const board = new FakeElement('div');
+    const renderer = new Renderer({
+        boardEl: board,
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    const highlights = emptyHighlights();
+    highlights.resting.add('5,4');
+    renderer.render(state, { selectedPiece: rook, phase: 'resting', highlights });
+    expect(board.children[51].children[1].className).toContain('selected-muted');
+    expect(board.children[51].children[1].className).not.toContain('valid-resting');
+
+    const restableHighlights = emptyHighlights();
+    restableHighlights.resting.add('5,1');
+    renderer.render(state, { selectedPiece: rook, phase: 'resting', highlights: restableHighlights });
+    expect(board.children[51].children[1].className).toContain('selected');
+    expect(board.children[51].children[1].className).toContain('valid-resting');
+    expect(board.children[51].children[1].className).not.toContain('selected-muted');
+
+    globalThis.document = previousDocument;
+});
+
+test('controller asks for a Knight ramp route when a destination has multiple double-jump paths', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const controller = new GameController({
+        boardEl: new FakeElement('div'),
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 6, { id: 'upper-ramp-a' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 8, { id: 'upper-ramp-b' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 6, { id: 'lower-ramp-a' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 8, { id: 'lower-ramp-b' }));
+    controller.selectPiece(knight);
+
+    controller.handleBoardClick({
+        target: {
+            closest: () => ({ dataset: { row: '5', col: '9' } }),
+        },
+    });
+
+    expect(controller.view.phase).toBe('ramp-route');
+    expect([...controller.view.highlights.rampRoutes].sort()).toEqual(['3,7', '7,7']);
+
+    controller.handleBoardClick({
+        target: {
+            closest: () => ({ dataset: { row: '3', col: '7' } }),
+        },
+    });
+
+    expect(controller.state.board[5][9]?.id).toBe('knight');
+    expect(controller.state.lastAction.rampSequence[0].land).toEqual({ r: 3, c: 7 });
+    controller.settings.animationsEnabled = true;
+    expect(controller.animationDelay(controller.state.lastAction)).toBe(ANIMATION_TIMING.doubleRampHopDurationMs * 2 + 60);
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('board animator plays double Knight ramp as two chained 550ms travel animations without an intermediate pause', async () => {
+    const animations = [];
+    const squareEl = new FakeElement('button');
+    const pieceEl = {
+        dataset: { pieceId: 'knight' },
+        className: 'piece white',
+        classList: new FakeElement('span').classList,
+        getBoundingClientRect: () => ({ left: 90, top: 50, width: 10, height: 10 }),
+        closest: () => squareEl,
+        animate: (keyframes, options) => {
+            const animation = {
+                keyframes,
+                options,
+                canceled: false,
+                finished: Promise.resolve(),
+                cancel() {
+                    this.canceled = true;
+                },
+            };
+            animations.push(animation);
+            return animation;
+        },
+    };
+    const animator = new BoardAnimator({
+        querySelectorAll: (selector) => (selector === '[data-piece-id]' ? [pieceEl] : []),
+    });
+
+    animator.animateMovement({
+        pieces: new Map([['knight', { rect: { left: 50, top: 50, width: 10, height: 10 } }]]),
+        squares: new Map([
+            ['3,7', { left: 70, top: 30, width: 10, height: 10 }],
+            ['5,9', { left: 90, top: 50, width: 10, height: 10 }],
+        ]),
+    }, {
+        mode: 'knightRamp',
+        pieceId: 'knight',
+        rampSequence: [
+            { ramp: { r: 4, c: 6 }, land: { r: 3, c: 7 } },
+            { ramp: { r: 4, c: 8 }, land: { r: 5, c: 9 } },
+        ],
+    });
+
+    await Promise.resolve();
+
+    expect(animations).toHaveLength(2);
+    expect(animations.map((animation) => animation.options.duration)).toEqual([
+        ANIMATION_TIMING.doubleRampHopDurationMs,
+        ANIMATION_TIMING.doubleRampHopDurationMs,
+    ]);
+    expect(animations.every((animation) => animation.options.easing === 'cubic-bezier(.18,.82,.22,1)')).toBe(true);
+    expect(animations.every((animation) => animation.options.fill === 'forwards')).toBe(true);
+    expect(animations[0].keyframes.map((frame) => frame.offset)).toEqual([0, 1]);
+    expect(animations[1].keyframes.map((frame) => frame.offset)).toEqual([0, 1]);
+    expect(animations[0].keyframes[0].transform).toContain('translate(-40px, 0px) scale(1.05)');
+    expect(animations[0].keyframes.at(-1).transform).toContain('translate(-20px, -20px) scale(1.05)');
+    expect(animations[1].keyframes[0].transform).toContain('translate(-20px, -20px) scale(1.05)');
+    expect(animations[1].keyframes.at(-1).transform).toContain('translate(0px, 0px) scale(1)');
+});
+
+test('single Knight ramp uses the normal move timer, not the double-ramp cadence', () => {
+    const action = {
+        mode: 'knightRamp',
+        rampSequence: [
+            { ramp: { r: 5, c: 6 }, land: { r: 5, c: 7 } },
+        ],
+    };
+
+    expect(moveAnimationDurationForAction(action)).toBe(ANIMATION_TIMING.moveDurationMs);
+});
+
+test('single Knight ramp keeps the normal ramp easing', () => {
+    const animated = {};
+    const squareEl = new FakeElement('button');
+    const pieceEl = {
+        dataset: { pieceId: 'knight' },
+        className: 'piece white',
+        classList: new FakeElement('span').classList,
+        getBoundingClientRect: () => ({ left: 70, top: 50, width: 10, height: 10 }),
+        closest: () => squareEl,
+        animate: (keyframes, options) => {
+            animated.options = options;
+            return { finished: Promise.resolve() };
+        },
+    };
+    const animator = new BoardAnimator({
+        querySelectorAll: (selector) => (selector === '[data-piece-id]' ? [pieceEl] : []),
+    });
+
+    animator.animateMovement({
+        pieces: new Map([['knight', { rect: { left: 50, top: 50, width: 10, height: 10 } }]]),
+        squares: new Map([
+            ['5,7', { left: 70, top: 50, width: 10, height: 10 }],
+        ]),
+    }, {
+        mode: 'knightRamp',
+        pieceId: 'knight',
+        rampSequence: [
+            { ramp: { r: 5, c: 6 }, land: { r: 5, c: 7 } },
+        ],
+    });
+
+    expect(animated.options.duration).toBe(ANIMATION_TIMING.moveDurationMs);
+    expect(animated.options.easing).toBe('cubic-bezier(.18,.82,.22,1)');
+});
+
 test('settings persist and AI slider maps to stronger search options', () => {
     const store = new Map();
     const storage = {
@@ -714,6 +905,40 @@ test('controller allows self-play turns only when AI is off', () => {
     expect(controller.canHumanAct()).toBe(true);
     controller.settings = { aiLevel: 3, animationsEnabled: true, playerSide: 'black' };
     expect(controller.canHumanAct()).toBe(false);
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller suppresses the board context menu on right-click', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const board = new FakeElement('div');
+    new GameController({
+        boardEl: board,
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    let prevented = false;
+    board.dispatchEvent({
+        type: 'contextmenu',
+        button: 2,
+        preventDefault: () => {
+            prevented = true;
+        },
+    });
+
+    expect(prevented).toBe(true);
 
     globalThis.document = previousDocument;
     globalThis.localStorage = previousLocalStorage;

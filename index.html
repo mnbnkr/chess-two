@@ -107,7 +107,8 @@
                                 <li>Life and Death are controlled by board half, can be passed through, and annihilate
                                     each other orthogonally. Death-hit attacks still land before the attacker dies.</li>
                                 <li>Attacks use a staging square. Killing blows choose a resting square.</li>
-                                <li>Checking the King intimidates the checking piece and suppresses its shield.</li>
+                                <li>A piece giving check becomes Intimidated, suppressing its shield while the check
+                                    continues.</li>
                                 <li>Pawns can advance up to three squares from home, use variant en passant, and promote
                                     on the far rank.</li>
                                 <li>Destroying a King ends the game immediately.</li>
@@ -150,7 +151,7 @@
     </div>
     <script>
         const chessTwoScript = document.createElement('script');
-        chessTwoScript.src = 'chess-two.bundle.js';
+        chessTwoScript.src = `chess-two.bundle.js?v=${Date.now()}`;
         document.body.appendChild(chessTwoScript);
     </script>
 </body>

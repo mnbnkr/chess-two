@@ -275,7 +275,9 @@
       action.staging ? squareKey(action.staging) : "",
       action.rest ? squareKey(action.rest) : "",
       action.promotionType ?? "",
-      action.rookId ?? ""
+      action.rookId ?? "",
+      action.deathLanding ? "deathLanding" : "",
+      rampSequenceKey(action.rampSequence)
     ];
     return bits.join("|");
   }
@@ -376,13 +378,15 @@
       const to = { r: piece.row + dir * step, c: piece.col };
       if (!isValidSquare(to.r, to.c))
         continue;
-      if (getPiece(state.board, to.r, to.c))
+      const occupant = getPiece(state.board, to.r, to.c);
+      const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+      if (occupant && !deathLanding)
         continue;
       if (step === 3 && piece.row !== startRow)
         continue;
       if (!isPawnForwardPathPassable(state, piece, step))
         continue;
-      actions.push(...promotionVariants(state, piece, {
+      const action = {
         kind: "move",
         mode: "pawnAdvance",
         pieceId: piece.id,
@@ -390,14 +394,16 @@
         from: { r: piece.row, c: piece.col },
         to,
         path: pawnPath(piece, step),
+        deathLanding,
         consumes: { standard: true, special: false },
-        enPassantOpportunity: step > 1 ? {
+        enPassantOpportunity: !deathLanding && step > 1 ? {
           from: { r: piece.row, c: piece.col },
           to,
           crossed: pawnPath(piece, step),
           eligibleColor: oppositeColor(piece.color)
         } : null
-      }));
+      };
+      actions.push(...deathLanding ? [action] : promotionVariants(state, piece, action));
     }
     const jumpTo = { r: piece.row + dir * 2, c: piece.col };
     const jumped = getPiece(state.board, piece.row + dir, piece.col);
@@ -443,7 +449,21 @@
           break;
         const occupant = getPiece(state.board, to.r, to.c);
         if (occupant) {
-          if (LIFE_DEATH_PIECES.has(occupant.type))
+          if (occupant.type === PIECE_TYPES.DEATH) {
+            actions.push(withActionId({
+              kind: "move",
+              mode: "slide",
+              pieceId: piece.id,
+              pieceType: piece.type,
+              from: { r: piece.row, c: piece.col },
+              to,
+              path: linePath({ r: piece.row, c: piece.col }, to),
+              deathLanding: true,
+              consumes: { standard: true, special: false }
+            }));
+            continue;
+          }
+          if (occupant.type === PIECE_TYPES.LIFE)
             continue;
           break;
         }
@@ -470,7 +490,9 @@
         const to = { r: piece.row + dr, c: piece.col + dc };
         if (!isValidSquare(to.r, to.c))
           continue;
-        if (getPiece(state.board, to.r, to.c))
+        const occupant = getPiece(state.board, to.r, to.c);
+        const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+        if (occupant && !deathLanding)
           continue;
         actions.push(withActionId({
           kind: "move",
@@ -480,6 +502,7 @@
           from: { r: piece.row, c: piece.col },
           to,
           path: [],
+          deathLanding,
           consumes: { standard: true, special: false }
         }));
       }
@@ -492,7 +515,9 @@
       const to = { r: piece.row + dr, c: piece.col + dc };
       if (!isValidSquare(to.r, to.c))
         continue;
-      if (getPiece(state.board, to.r, to.c))
+      const occupant = getPiece(state.board, to.r, to.c);
+      const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+      if (occupant && !deathLanding)
         continue;
       actions.push(withActionId({
         kind: "move",
@@ -502,6 +527,7 @@
         from: { r: piece.row, c: piece.col },
         to,
         path: knightPassThroughSquares(piece, to),
+        deathLanding,
         consumes: { standard: true, special: false }
       }));
     }
@@ -522,8 +548,21 @@
   }
   function knightRampDestinations(state, piece) {
     const results = [];
-    const seen = new Set;
+    const seenRoutes = new Set;
     const original = { r: piece.row, c: piece.col };
+    const pushRoute = (land, sequence) => {
+      const key = rampSequenceKey(sequence);
+      if (seenRoutes.has(key))
+        return;
+      seenRoutes.add(key);
+      results.push({
+        ...land,
+        sequence: sequence.map((step) => ({
+          ramp: { ...step.ramp },
+          land: { ...step.land }
+        }))
+      });
+    };
     const singleJumps = (from, visited) => {
       const jumps = [];
       for (let dr = -1;dr <= 1; dr++) {
@@ -549,23 +588,13 @@
     const firstVisited = new Set([squareKey(original)]);
     for (const first of singleJumps(original, firstVisited)) {
       const firstKey = squareKey(first.land);
-      if (!seen.has(firstKey)) {
-        seen.add(firstKey);
-        results.push({ ...first.land, sequence: [{ ramp: first.ramp, land: first.land }] });
-      }
+      pushRoute(first.land, [{ ramp: first.ramp, land: first.land }]);
       const secondVisited = new Set([squareKey(original), firstKey]);
       for (const second of singleJumps(first.land, secondVisited)) {
-        const secondKey = squareKey(second.land);
-        if (!seen.has(secondKey)) {
-          seen.add(secondKey);
-          results.push({
-            ...second.land,
-            sequence: [
-              { ramp: first.ramp, land: first.land },
-              { ramp: second.ramp, land: second.land }
-            ]
-          });
-        }
+        pushRoute(second.land, [
+          { ramp: first.ramp, land: first.land },
+          { ramp: second.ramp, land: second.land }
+        ]);
       }
     }
     return results;
@@ -928,7 +957,7 @@
     const destroyed = applyPathEffects(state, piece, jumpedPiece ? [{ r: jumpedPiece.row, c: jumpedPiece.col }] : action.path ?? []);
     setPiece(state.board, piece.row, piece.col, null);
     piece.hasMoved = true;
-    if (destroyed) {
+    if (destroyed || action.deathLanding) {
       removePiece(state, piece);
       return;
     }
@@ -1201,6 +1230,9 @@
       seen.add(key);
       return true;
     });
+  }
+  function rampSequenceKey(sequence = []) {
+    return sequence.map((step) => `${squareKey(step.ramp)}>${squareKey(step.land)}`).join(";");
   }
   function sortActions(actions) {
     return [...dedupeActions(actions)].sort((a, b) => actionSortScore(b) - actionSortScore(a) || a.id.localeCompare(b.id));
@@ -1588,6 +1620,7 @@
       shieldLost: false,
       diesAfterAction: false,
       deathStaging: Boolean(action.deathStaging),
+      deathLanding: Boolean(action.deathLanding),
       lifeCount: 0,
       deathCount: 0,
       actorValue: actor ? MATERIAL_VALUES[actor.type] ?? 0 : 0,
@@ -1622,6 +1655,10 @@
       report.deathCount += 1;
       report.diesAfterAction = true;
     }
+    if (action.deathLanding) {
+      report.deathCount += 1;
+      report.diesAfterAction = true;
+    }
     return report;
   }
   function pathEffectScore(report) {
@@ -1631,7 +1668,7 @@
     if (report.shieldLost)
       score -= report.shieldValue + 38;
     if (report.diesAfterAction)
-      score -= report.actorValue + report.shieldValue + (report.deathStaging ? 760 : 520);
+      score -= report.actorValue + report.shieldValue + (report.deathStaging || report.deathLanding ? 760 : 520);
     score += report.lifeCount * 8;
     score -= report.deathCount * 12;
     return score;
@@ -2315,8 +2352,10 @@
   function markerForSquare(row, col, view, highlights) {
     const classes = [];
     const key = `${row},${col}`;
-    if (view.selectedPiece?.row === row && view.selectedPiece?.col === col)
-      classes.push("selected");
+    const isResting = highlights.resting.has(key);
+    if (view.selectedPiece?.row === row && view.selectedPiece?.col === col) {
+      classes.push(view.phase === "resting" && !isResting ? "selected-muted" : "selected");
+    }
     if (highlights.moves.has(key))
       classes.push("valid-move");
     if (highlights.rampMoves?.has(key))
@@ -2327,7 +2366,9 @@
       classes.push("valid-special");
     if (highlights.staging.has(key))
       classes.push("valid-staging");
-    if (highlights.resting.has(key))
+    if (highlights.rampRoutes?.has(key))
+      classes.push("valid-ramp-route");
+    if (isResting)
       classes.push("valid-resting");
     if (classes.length === 0)
       return null;
@@ -2342,6 +2383,7 @@
       attacks: new Set,
       specials: new Set,
       staging: new Set,
+      rampRoutes: new Set,
       resting: new Set
     };
   }
@@ -2368,8 +2410,14 @@
       return "Skipped Life/Death";
     if (action.mode === "castle")
       return `King castles ${from}-${to}`;
-    if (action.kind === "move")
-      return `${piece} ${from}-${to}${suffix}`;
+    if (action.mode === "knightRamp") {
+      const via = action.rampSequence?.slice(0, -1).map((step) => squareLabel(step.land.r, step.land.c)) ?? [];
+      return `Knight ${from}-${to}${via.length ? ` via ${via.join(", ")}` : ""}`;
+    }
+    if (action.kind === "move") {
+      const deathNote = action.deathLanding ? " into Death" : "";
+      return `${piece} ${from}-${to}${deathNote}${suffix}`;
+    }
     if (action.kind === "attack") {
       const target = `${action.target?.color ?? "enemy"} ${action.target?.type ?? "piece"}`;
       const hit = action.target?.hadShield ? "breaks shield on" : "takes";
@@ -2422,6 +2470,8 @@
       action.targetId ?? "",
       action.promotionType ?? "",
       action.deathStaging ? "death" : "",
+      action.deathLanding ? "deathLanding" : "",
+      rampSequenceKey2(action.rampSequence),
       actionSquareKey(action.from),
       actionSquareKey(action.to),
       actionSquareKey(action.staging),
@@ -2431,10 +2481,36 @@
   function actionSquareKey(square) {
     return square ? `${square.r},${square.c}` : "";
   }
+  function rampSequenceKey2(sequence = []) {
+    return sequence.map((step) => `${actionSquareKey(step.ramp)}>${actionSquareKey(step.land)}`).join(";");
+  }
 
   // src/ui/animation.js
-  var EFFECT_DURATION = 440;
-  var MOVE_DURATION = 260;
+  var ANIMATION_TIMING = Object.freeze({
+    effectDurationMs: 520,
+    moveDurationMs: 700,
+    doubleRampHopDurationMs: 550,
+    newPieceDurationMs: 260,
+    removedPieceDurationMs: 420,
+    panelPulseDurationMs: 420,
+    turnAdvanceDelayMs: 430
+  });
+  var {
+    effectDurationMs: EFFECT_DURATION,
+    moveDurationMs: MOVE_DURATION,
+    doubleRampHopDurationMs: DOUBLE_RAMP_HOP_DURATION,
+    newPieceDurationMs: NEW_PIECE_DURATION,
+    removedPieceDurationMs: REMOVED_PIECE_DURATION,
+    panelPulseDurationMs: PANEL_PULSE_DURATION
+  } = ANIMATION_TIMING;
+  var MOVE_EASING = "cubic-bezier(.18,.82,.22,1)";
+  function moveAnimationDurationForAction(action = null) {
+    const hopCount = action?.mode === "knightRamp" ? Math.max(1, action.rampSequence?.length ?? 1) : 1;
+    if (action?.mode === "knightRamp" && hopCount > 1) {
+      return DOUBLE_RAMP_HOP_DURATION * hopCount;
+    }
+    return MOVE_DURATION;
+  }
 
   class BoardAnimator {
     constructor(boardEl, options = {}) {
@@ -2466,11 +2542,11 @@
       if (!enabled || this.prefersReducedMotion)
         return;
       const snapshot = normalizeSnapshot(previous);
-      this.animateMovement(snapshot);
+      this.animateMovement(snapshot, action);
       this.animateRemovedPieces(snapshot);
       this.animateEffects(action);
     }
-    animateMovement(previous) {
+    animateMovement(previous, action = null) {
       for (const pieceEl of this.boardEl.querySelectorAll?.("[data-piece-id]") ?? []) {
         const old = previous.pieces.get(pieceEl.dataset.pieceId);
         if (!old || typeof pieceEl.getBoundingClientRect !== "function" || typeof pieceEl.animate !== "function") {
@@ -2482,6 +2558,10 @@
         const dy = old.rect.top - newRect.top;
         if (Math.abs(dx) < 1 && Math.abs(dy) < 1)
           continue;
+        if (action?.mode === "knightRamp" && action.pieceId === pieceEl.dataset.pieceId) {
+          if (this.animateKnightRamp(pieceEl, old, action, previous))
+            continue;
+        }
         const squareEl = pieceEl.closest?.(".square");
         squareEl?.classList.add("is-animating");
         pieceEl.classList.add("is-moving");
@@ -2491,10 +2571,13 @@
             filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))"
           },
           { transform: "translate(0, 0) scale(0.98)", offset: 0.82 },
-          { transform: "translate(0, 0) scale(1)", filter: "drop-shadow(0 0 0 rgba(0,0,0,0))" }
+          {
+            transform: "translate(0, 0) scale(1)",
+            filter: "drop-shadow(0 0 0 rgba(0,0,0,0))"
+          }
         ], {
           duration: MOVE_DURATION,
-          easing: "cubic-bezier(.18,.82,.22,1)",
+          easing: MOVE_EASING,
           fill: "none"
         });
         const cleanup = () => {
@@ -2504,19 +2587,88 @@
         animation.finished?.then(cleanup, cleanup);
       }
     }
+    animateKnightRamp(pieceEl, old, action, previous) {
+      if (!Array.isArray(action.rampSequence) || action.rampSequence.length === 0) {
+        return false;
+      }
+      if (typeof pieceEl.getBoundingClientRect !== "function" || typeof pieceEl.animate !== "function") {
+        return false;
+      }
+      const finalRect = pieceEl.getBoundingClientRect();
+      const routeRects = action.rampSequence.map((step) => previous.squares.get(squareKey2(step.land)));
+      if (routeRects.some((rect) => !rect))
+        return false;
+      const squareEl = pieceEl.closest?.(".square");
+      const hopCount = routeRects.length;
+      const points = [old.rect, ...routeRects];
+      if (hopCount > 1) {
+        this.animateKnightRampSequence(pieceEl, squareEl, points, finalRect);
+        return true;
+      }
+      squareEl?.classList.add("is-animating");
+      pieceEl.classList.add("is-moving");
+      const animation = pieceEl.animate(normalMoveKeyframes(points[0], points[1], finalRect), {
+        duration: moveAnimationDurationForAction(action),
+        easing: MOVE_EASING,
+        fill: "none"
+      });
+      const cleanup = () => {
+        pieceEl.classList.remove("is-moving");
+        squareEl?.classList.remove("is-animating");
+      };
+      animation.finished?.then(cleanup, cleanup);
+      return true;
+    }
+    animateKnightRampSequence(pieceEl, squareEl, points, finalRect) {
+      squareEl?.classList.add("is-animating");
+      pieceEl.classList.add("is-moving");
+      const animations = [];
+      const cleanup = () => {
+        for (const animation of animations)
+          animation.cancel?.();
+        pieceEl.classList.remove("is-moving");
+        squareEl?.classList.remove("is-animating");
+      };
+      const runHop = (index) => {
+        if (index >= points.length - 1) {
+          cleanup();
+          return;
+        }
+        const isFinalHop = index === points.length - 2;
+        const animation = pieceEl.animate(doubleRampHopKeyframes(points[index], points[index + 1], finalRect, isFinalHop), {
+          duration: DOUBLE_RAMP_HOP_DURATION,
+          easing: MOVE_EASING,
+          fill: "forwards"
+        });
+        animations.push(animation);
+        const next = () => runHop(index + 1);
+        if (animation.finished) {
+          animation.finished.then(next, cleanup);
+        } else {
+          globalThis.setTimeout?.(next, DOUBLE_RAMP_HOP_DURATION);
+        }
+      };
+      runHop(0);
+    }
     animateNewPiece(pieceEl) {
       if (typeof pieceEl.animate !== "function")
         return;
       pieceEl.animate([
-        { opacity: 0, transform: "scale(0.72) translateY(-8%)", filter: "blur(2px)" },
+        {
+          opacity: 0,
+          transform: "scale(0.72) translateY(-8%)",
+          filter: "blur(2px)"
+        },
         { opacity: 1, transform: "scale(1)", filter: "blur(0)" }
       ], {
-        duration: 210,
+        duration: NEW_PIECE_DURATION,
         easing: "cubic-bezier(.2,.8,.22,1)"
       });
     }
     animateRemovedPieces(previous) {
-      const currentPieces = [...this.boardEl.querySelectorAll?.("[data-piece-id]") ?? []];
+      const currentPieces = [
+        ...this.boardEl.querySelectorAll?.("[data-piece-id]") ?? []
+      ];
       const currentIds = new Set(currentPieces.map((pieceEl) => pieceEl.dataset.pieceId));
       const boardRect = this.boardEl.getBoundingClientRect?.();
       if (!boardRect || !globalThis.document)
@@ -2535,16 +2687,20 @@
         const animation = ghost.animate?.([
           { opacity: 1, transform: "scale(1)", filter: "blur(0)" },
           { opacity: 0.85, transform: "scale(1.16)", offset: 0.34 },
-          { opacity: 0, transform: "scale(0.66) rotate(5deg)", filter: "blur(2px)" }
+          {
+            opacity: 0,
+            transform: "scale(0.66) rotate(5deg)",
+            filter: "blur(2px)"
+          }
         ], {
-          duration: 320,
+          duration: REMOVED_PIECE_DURATION,
           easing: "cubic-bezier(.2,.8,.22,1)",
           fill: "forwards"
         });
         if (animation?.finished) {
           animation.finished.then(() => ghost.remove(), () => ghost.remove());
         } else {
-          globalThis.setTimeout?.(() => ghost.remove(), 320);
+          globalThis.setTimeout?.(() => ghost.remove(), REMOVED_PIECE_DURATION);
         }
         if (old.square)
           this.pulseSquare(old.square, "death-burst");
@@ -2553,8 +2709,6 @@
     animateEffects(action) {
       if (!action)
         return;
-      for (const square of action.path ?? [])
-        this.pulseSquare(square, "path-spark", 300);
       if (action.kind === "move")
         this.pulseSquare(action.to, "move-land");
       if (action.kind === "attack") {
@@ -2581,7 +2735,7 @@
       if (!squareRect || !boardRect || !globalThis.document)
         return;
       const effect = globalThis.document.createElement("span");
-      const inset = className === "path-spark" ? 0.22 : 0.08;
+      const inset = 0.08;
       const left = squareRect.left - boardRect.left + squareRect.width * inset;
       const top = squareRect.top - boardRect.top + squareRect.height * inset;
       const size = squareRect.width * (1 - inset * 2);
@@ -2600,19 +2754,57 @@
       if (!panel)
         return;
       panel.classList.add("skip-pulse");
-      globalThis.setTimeout?.(() => panel.classList.remove("skip-pulse"), 360);
+      globalThis.setTimeout?.(() => panel.classList.remove("skip-pulse"), PANEL_PULSE_DURATION);
     }
   }
   function normalizeSnapshot(previous) {
     if (previous?.pieces)
       return previous;
     return {
-      pieces: previous instanceof Map ? new Map([...previous].map(([id, rect]) => [id, { rect, className: "", textContent: "", square: null }])) : new Map,
+      pieces: previous instanceof Map ? new Map([...previous].map(([id, rect]) => [
+        id,
+        { rect, className: "", textContent: "", square: null }
+      ])) : new Map,
       squares: new Map
     };
   }
   function squareKey2(dataset) {
-    return `${dataset.row},${dataset.col}`;
+    return `${dataset.row ?? dataset.r},${dataset.col ?? dataset.c}`;
+  }
+  function normalMoveKeyframes(from, to, finalRect) {
+    return [
+      {
+        offset: 0,
+        transform: transformForRect(from, finalRect, 1.05),
+        filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))"
+      },
+      {
+        offset: 0.82,
+        transform: transformForRect(to, finalRect, 0.98)
+      },
+      {
+        offset: 1,
+        transform: transformForRect(to, finalRect, 1),
+        filter: "drop-shadow(0 0 0 rgba(0,0,0,0))"
+      }
+    ];
+  }
+  function doubleRampHopKeyframes(from, to, finalRect, isFinalHop) {
+    return [
+      {
+        offset: 0,
+        transform: transformForRect(from, finalRect, 1.05),
+        filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))"
+      },
+      {
+        offset: 1,
+        transform: transformForRect(to, finalRect, isFinalHop ? 1 : 1.05),
+        filter: isFinalHop ? "drop-shadow(0 0 0 rgba(0,0,0,0))" : "drop-shadow(0 14px 12px rgba(0,0,0,0.48))"
+      }
+    ];
+  }
+  function transformForRect(rect, finalRect, scale) {
+    return `translate(${rect.left - finalRect.left}px, ${rect.top - finalRect.top}px) scale(${scale})`;
   }
 
   // src/ui/settings.js
@@ -2687,7 +2879,10 @@
       this.settingsOpen = false;
       this.rulesOpen = false;
       this.documentClickHandler = (event) => this.handleDocumentClick(event);
+      this.boardContextMenuHandler = (event) => this.suppressBoardContextMenu(event);
       boardEl.addEventListener("click", (event) => this.handleBoardClick(event));
+      boardEl.addEventListener("contextmenu", this.boardContextMenuHandler);
+      boardEl.addEventListener("auxclick", this.boardContextMenuHandler);
       promotionEl.addEventListener("click", (event) => this.handlePromotionClick(event));
       controlsEl?.addEventListener("click", (event) => this.handleControlClick(event));
       settingsEl?.addEventListener("click", (event) => this.handleSettingsClick(event));
@@ -2705,6 +2900,7 @@
         phaseInfo: "White to move. Select a piece.",
         highlights: emptyHighlights(),
         attackCandidates: [],
+        rampRouteCandidates: [],
         stagedAttackCandidates: [],
         promotionActions: [],
         isAiThinking: false
@@ -2722,6 +2918,10 @@
       }
       if (this.view.phase === "resting") {
         this.chooseResting(row, col);
+        return;
+      }
+      if (this.view.phase === "ramp-route") {
+        this.chooseRampRoute(row, col);
         return;
       }
       const piece = this.state.board[row][col];
@@ -2747,6 +2947,10 @@
       }
       if (piece && ownerOf(piece) === this.state.currentPlayer)
         this.selectPiece(piece);
+    }
+    suppressBoardContextMenu(event) {
+      if (event.button === undefined || event.button === 2)
+        event.preventDefault?.();
     }
     handlePromotionClick(event) {
       const button = event.target.closest("[data-promotion]");
@@ -2845,6 +3049,10 @@
       });
       if (candidates.length === 0)
         return false;
+      if (candidates[0]?.mode === "knightRamp") {
+        this.chooseKnightRampRoute(candidates);
+        return true;
+      }
       this.commitOrPromote(candidates);
       return true;
     }
@@ -2911,6 +3119,31 @@
       }
       this.commitOrPromote(candidates);
     }
+    chooseKnightRampRoute(candidates) {
+      const routeKeys = uniqueSquareKeys(candidates.map((action) => rampRouteChoiceSquare(action)));
+      if (routeKeys.length > 1) {
+        this.view = {
+          ...this.view,
+          phase: "ramp-route",
+          rampRouteCandidates: candidates,
+          highlights: {
+            ...emptyHighlights(),
+            rampRoutes: new Set(routeKeys)
+          },
+          phaseInfo: "Choose the Knight ramp route."
+        };
+        this.render();
+        return;
+      }
+      this.commitOrPromote(candidates);
+    }
+    chooseRampRoute(row, col) {
+      const key = `${row},${col}`;
+      const candidates = this.view.rampRouteCandidates.filter((action) => squareKey(rampRouteChoiceSquare(action)) === key);
+      if (candidates.length === 0)
+        return;
+      this.commitOrPromote(candidates);
+    }
     chooseResting(row, col) {
       const key = `${row},${col}`;
       const candidates = this.view.stagedAttackCandidates.filter((action) => squareKey(action.rest) === key);
@@ -2939,7 +3172,7 @@
       this.clearSelection();
       this.render();
       this.animator.animate(previous, action, this.settings.animationsEnabled);
-      this.maybeRunAiTurn({ startDelay: this.animationDelay() });
+      this.maybeRunAiTurn({ startDelay: this.animationDelay(action) });
     }
     skipSpecialMove() {
       if (!this.canHumanAct() || !canSkipSpecialMove(this.state, this.state.currentPlayer))
@@ -2949,7 +3182,7 @@
       this.clearSelection();
       this.render();
       this.animator.animate(previous, this.state.lastAction, this.settings.animationsEnabled);
-      this.maybeRunAiTurn({ startDelay: this.animationDelay() });
+      this.maybeRunAiTurn({ startDelay: this.animationDelay(this.state.lastAction) });
     }
     newGame() {
       this.state = createGameState();
@@ -2992,7 +3225,7 @@
         this.view = { ...this.createEmptyView(), isAiThinking: this.state.currentPlayer === AI_COLOR };
         this.render();
         this.animator.animate(previous, action, this.settings.animationsEnabled);
-        await delay(this.animationDelay());
+        await delay(this.animationDelay(action));
       }
       this.isAiRunning = false;
       this.clearSelection();
@@ -3016,8 +3249,10 @@
     canShowSkip() {
       return this.canHumanAct() && canSkipSpecialMove(this.state, this.state.currentPlayer);
     }
-    animationDelay() {
-      return this.settings.animationsEnabled ? 280 : 0;
+    animationDelay(action = null) {
+      if (!this.settings.animationsEnabled)
+        return 0;
+      return Math.max(ANIMATION_TIMING.turnAdvanceDelayMs, moveAnimationDurationForAction(action) + 60);
     }
   }
   function highlightsForActions(actions, selectedPiece) {
@@ -3035,6 +3270,11 @@
     highlights.moves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     highlights.rampMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     return highlights;
+  }
+  function rampRouteChoiceSquare(action) {
+    if (action.rampSequence?.length > 1)
+      return action.rampSequence[0].land;
+    return action.to;
   }
   function uniqueSquareKeys(squares) {
     return [...new Set(squares.filter(Boolean).map((square) => squareKey(square)))];

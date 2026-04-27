@@ -16,10 +16,10 @@ This file is the canonical rule prompt for Chess Two. Game logic, UI behavior, t
 
 The board has alternating light and dark squares. Each player has the usual King, Queen, two Rooks, two Bishops, two Knights, and ten Pawns, plus one Life piece and one Death piece.
 
-Back-rank order from the White side is:
+Back-rank order how it visually appears from the White side:
 
-- White: Life, Rook, Knight, Bishop, Queen, King, Bishop, Knight, Rook, Death.
 - Black: Death, Rook, Knight, Bishop, Queen, King, Bishop, Knight, Rook, Life.
+- White: Life, Rook, Knight, Bishop, Queen, King, Bishop, Knight, Rook, Death.
 
 Pawns fill the second rank for each side.
 
@@ -50,7 +50,7 @@ If only the two Kings and any number of Life pieces remain, the game is a draw. 
 - Life healing gives an eligible shieldless piece one Shield and one-turn immunity.
 - Immunity blocks attack damage, Death kills, and Life/Death pass-through damage until it expires.
 - A piece that gives check to a King becomes Intimidated.
-- An Intimidated piece loses its Shield while it is intimidating the King.
+- An Intimidated checking piece loses its Shield while it continues to give check.
 - An Intimidated piece cannot gain a Shield from Life healing or Life pass-through.
 - Once that piece no longer gives check, its intimidation ends and its Shield is restored if the rules say it should return.
 - Check is status and intimidation only. It does not restrict legal moves and does not create checkmate.
@@ -64,14 +64,15 @@ Standard pieces use ordinary chess movement patterns unless changed here.
 - Enemy pieces are damaged or removed only through the attack system.
 - Standard pieces may move or attack through Life and Death pieces as if their squares were empty.
 - Passing through Life or Death triggers the matching pass-through effect.
-- A standard piece may not end a normal move on a Life or Death square.
+- A standard piece may not remain on a Life square after a normal move.
+- A standard piece may choose a Death-occupied square as the final square of a normal move; the Death piece remains, and the moving piece is removed immediately after the move resolves.
 - Any successful attack counts as moving the attacker for first-move and castling tracking, even when the attacker was already on its staging square.
 
 ## Pawns
 
 - A Pawn that has not moved may advance 1, 2, or 3 empty squares forward.
 - If a Pawn advanced only one square from its home rank and is on rank 3 for White or rank 8 for Black, it may still advance 1 or 2 empty squares forward.
-- Pawns can advance through Life and Death pieces as pass-through squares, but their final landing square must be empty.
+- Pawns can advance through Life and Death pieces as pass-through squares. Their final landing square must be empty unless it is a Death-occupied square chosen as a fatal final square.
 - Pawn attacks are diagonal and use the attack system.
 - Variant en passant is available only as the immediate reply. If a Pawn advanced multiple squares and crossed an enemy Pawn's diagonal attack square, that enemy Pawn may attack it using the crossed square as the staging or landing square.
 - On the opponent's half of the board, a Pawn directly blocked by an enemy-controlled Life or Death piece may jump over it to the empty square immediately beyond it. The jumped Life/Death piece applies its pass-through effect.

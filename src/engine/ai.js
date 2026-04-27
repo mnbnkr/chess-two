@@ -385,6 +385,7 @@ function pathEffectReport(state, action) {
         shieldLost: false,
         diesAfterAction: false,
         deathStaging: Boolean(action.deathStaging),
+        deathLanding: Boolean(action.deathLanding),
         lifeCount: 0,
         deathCount: 0,
         actorValue: actor ? MATERIAL_VALUES[actor.type] ?? 0 : 0,
@@ -418,6 +419,10 @@ function pathEffectReport(state, action) {
         report.deathCount += 1;
         report.diesAfterAction = true;
     }
+    if (action.deathLanding) {
+        report.deathCount += 1;
+        report.diesAfterAction = true;
+    }
     return report;
 }
 
@@ -425,7 +430,7 @@ function pathEffectScore(report) {
     let score = 0;
     if (report.shieldGained) score += 78;
     if (report.shieldLost) score -= report.shieldValue + 38;
-    if (report.diesAfterAction) score -= report.actorValue + report.shieldValue + (report.deathStaging ? 760 : 520);
+    if (report.diesAfterAction) score -= report.actorValue + report.shieldValue + (report.deathStaging || report.deathLanding ? 760 : 520);
     score += report.lifeCount * 8;
     score -= report.deathCount * 12;
     return score;

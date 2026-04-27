@@ -14,7 +14,7 @@ Chess Two inherits ordinary chess movement where the variant does not explicitly
 - A turn has one standard-piece move slot and one Life/Death move slot. A Life heal or Death kill consumes both slots.
 - Pawns, Rooks, Knights, and Bishops start shielded. Kings, Queens, Life, and Death are always unshielded.
 - Attacks replace captures. Most attacks require a staging square next to the target; Death staging is fatal after the blow lands.
-- Check does not create checkmate rules. A piece giving check becomes Intimidated and cannot gain a Shield while intimidating the King.
+- Check does not create checkmate rules. A piece giving check becomes Intimidated and cannot gain a Shield while it continues giving check.
 - Pawns can advance up to three squares on their first move, have variant en passant, and promote on the far rank.
 - Knights may also use adjacent non-Life/Death pieces as ramps for non-attacking jumps.
 - Life and Death are controlled by board half, not by original color. They move diagonally, can be passed through by standard pieces, and annihilate when orthogonally adjacent.

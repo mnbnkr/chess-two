@@ -282,13 +282,17 @@ function renderPiece(piece, state) {
 function markerForSquare(row, col, view, highlights) {
     const classes = [];
     const key = `${row},${col}`;
-    if (view.selectedPiece?.row === row && view.selectedPiece?.col === col) classes.push('selected');
+    const isResting = highlights.resting.has(key);
+    if (view.selectedPiece?.row === row && view.selectedPiece?.col === col) {
+        classes.push(view.phase === 'resting' && !isResting ? 'selected-muted' : 'selected');
+    }
     if (highlights.moves.has(key)) classes.push('valid-move');
     if (highlights.rampMoves?.has(key)) classes.push('valid-ramp');
     if (highlights.attacks.has(key)) classes.push('valid-attack');
     if (highlights.specials.has(key)) classes.push('valid-special');
     if (highlights.staging.has(key)) classes.push('valid-staging');
-    if (highlights.resting.has(key)) classes.push('valid-resting');
+    if (highlights.rampRoutes?.has(key)) classes.push('valid-ramp-route');
+    if (isResting) classes.push('valid-resting');
     if (classes.length === 0) return null;
     const marker = document.createElement('span');
     marker.className = `highlight-overlay ${classes.join(' ')}`;
@@ -302,6 +306,7 @@ export function emptyHighlights() {
         attacks: new Set(),
         specials: new Set(),
         staging: new Set(),
+        rampRoutes: new Set(),
         resting: new Set(),
     };
 }
@@ -332,7 +337,14 @@ function describeAction(action) {
 
     if (action.kind === 'skip') return 'Skipped Life/Death';
     if (action.mode === 'castle') return `King castles ${from}-${to}`;
-    if (action.kind === 'move') return `${piece} ${from}-${to}${suffix}`;
+    if (action.mode === 'knightRamp') {
+        const via = action.rampSequence?.slice(0, -1).map((step) => squareLabel(step.land.r, step.land.c)) ?? [];
+        return `Knight ${from}-${to}${via.length ? ` via ${via.join(', ')}` : ''}`;
+    }
+    if (action.kind === 'move') {
+        const deathNote = action.deathLanding ? ' into Death' : '';
+        return `${piece} ${from}-${to}${deathNote}${suffix}`;
+    }
     if (action.kind === 'attack') {
         const target = `${action.target?.color ?? 'enemy'} ${action.target?.type ?? 'piece'}`;
         const hit = action.target?.hadShield ? 'breaks shield on' : 'takes';
@@ -387,6 +399,8 @@ function actionHistoryKey(action) {
         action.targetId ?? '',
         action.promotionType ?? '',
         action.deathStaging ? 'death' : '',
+        action.deathLanding ? 'deathLanding' : '',
+        rampSequenceKey(action.rampSequence),
         actionSquareKey(action.from),
         actionSquareKey(action.to),
         actionSquareKey(action.staging),
@@ -396,4 +410,8 @@ function actionHistoryKey(action) {
 
 function actionSquareKey(square) {
     return square ? `${square.r},${square.c}` : '';
+}
+
+function rampSequenceKey(sequence = []) {
+    return sequence.map((step) => `${actionSquareKey(step.ramp)}>${actionSquareKey(step.land)}`).join(';');
 }

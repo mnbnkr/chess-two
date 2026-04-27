@@ -107,17 +107,26 @@ test('white a2 pawn always has all three opening advances when lanes are clear',
     expect(moves).toEqual(['5,0', '6,0', '7,0']);
 });
 
-test('white a2 pawn keeps the long advance through Life and Death pass-through squares', () => {
-    const state = createGameState();
-    state.board[7][0] = createPiece(PIECE_TYPES.LIFE, COLORS.BLACK, 7, 0, { id: 'life-pass' });
-    state.board[6][0] = createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 6, 0, { id: 'death-pass' });
+test('white a2 pawn can either pass through Death or choose it as a fatal final square', () => {
+    let state = createGameState();
+    state.board[7][1] = createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 7, 1, { id: 'death-pass' });
 
     const moves = generateLegalActions(state)
-        .filter((action) => action.pieceId === 'white-pawn-0' && action.mode === 'pawnAdvance')
-        .map((action) => `${action.to.r},${action.to.c}`)
+        .filter((action) => action.pieceId === 'white-pawn-1' && action.mode === 'pawnAdvance')
+        .map((action) => `${action.to.r},${action.to.c}${action.deathLanding ? ':death' : ''}`)
         .sort();
 
-    expect(moves).toEqual(['5,0']);
+    expect(moves).toEqual(['5,1', '6,1', '7,1:death']);
+
+    const deathLanding = actionMatching(state, (action) => (
+        action.pieceId === 'white-pawn-1'
+        && action.mode === 'pawnAdvance'
+        && action.deathLanding
+    ));
+    state = applyAction(state, deathLanding);
+
+    expect(state.board[7][1]?.id).toBe('death-pass');
+    expect(state.board.flat().some((piece) => piece?.id === 'white-pawn-1')).toBe(false);
 });
 
 test('pawn that moved one square can still make a two-square continuation', () => {
@@ -146,6 +155,24 @@ test('Life and Death pass-through effects modify shields during standard movemen
     expect(state.board[9][5]?.id).toBe('rook');
     expect(state.board[9][5].hasShield).toBe(false);
     expect(state.board[9][3]?.id).toBe('death');
+});
+
+test('standard pieces may choose a Death square as a fatal normal-move destination', () => {
+    let state = createEmptyState(COLORS.WHITE);
+    placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 9, 1, { id: 'rook' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 9, 3, { id: 'death' }));
+
+    const deathLanding = actionMatching(state, (action) => (
+        action.pieceId === 'rook'
+        && action.kind === 'move'
+        && action.to.r === 9
+        && action.to.c === 3
+        && action.deathLanding
+    ));
+    state = applyAction(state, deathLanding);
+
+    expect(state.board[9][3]?.id).toBe('death');
+    expect(state.board.flat().some((piece) => piece?.id === 'rook')).toBe(false);
 });
 
 test('Death pass-through destroys an attacker after the attack resolves', () => {
@@ -237,6 +264,28 @@ test('knights can ramp jump over adjacent non-Life/Death pieces', () => {
     expect(generateLegalActions(state).some((action) => (
         action.mode === 'knightRamp' && action.to.r === 5 && action.to.c === 7
     ))).toBe(true);
+});
+
+test('knight ramp actions preserve distinct double-jump routes to the same destination', () => {
+    const state = createEmptyState(COLORS.WHITE);
+    placePiece(state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 6, { id: 'upper-ramp-a' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 8, { id: 'upper-ramp-b' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 6, { id: 'lower-ramp-a' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 8, { id: 'lower-ramp-b' }));
+
+    const routes = generateLegalActions(state).filter((action) => (
+        action.mode === 'knightRamp'
+        && action.to.r === 5
+        && action.to.c === 9
+    ));
+
+    expect(routes).toHaveLength(2);
+    expect(routes.map((action) => `${action.rampSequence[0].land.r},${action.rampSequence[0].land.c}`).sort()).toEqual([
+        '3,7',
+        '7,7',
+    ]);
+    expect(new Set(routes.map((action) => action.id)).size).toBe(2);
 });
 
 test('knight ramp jumps cannot use Life or Death pieces as ramps', () => {

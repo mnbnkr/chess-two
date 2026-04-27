@@ -12,7 +12,7 @@ import {
     squareKey,
 } from '../engine/index.js';
 import { Renderer, emptyHighlights } from './renderer.js';
-import { BoardAnimator } from './animation.js';
+import { ANIMATION_TIMING, BoardAnimator, moveAnimationDurationForAction } from './animation.js';
 import {
     aiLabelForLevel,
     aiOptionsForLevel,
@@ -36,8 +36,11 @@ export class GameController {
         this.settingsOpen = false;
         this.rulesOpen = false;
         this.documentClickHandler = (event) => this.handleDocumentClick(event);
+        this.boardContextMenuHandler = (event) => this.suppressBoardContextMenu(event);
 
         boardEl.addEventListener('click', (event) => this.handleBoardClick(event));
+        boardEl.addEventListener('contextmenu', this.boardContextMenuHandler);
+        boardEl.addEventListener('auxclick', this.boardContextMenuHandler);
         promotionEl.addEventListener('click', (event) => this.handlePromotionClick(event));
         controlsEl?.addEventListener('click', (event) => this.handleControlClick(event));
         settingsEl?.addEventListener('click', (event) => this.handleSettingsClick(event));
@@ -56,6 +59,7 @@ export class GameController {
             phaseInfo: 'White to move. Select a piece.',
             highlights: emptyHighlights(),
             attackCandidates: [],
+            rampRouteCandidates: [],
             stagedAttackCandidates: [],
             promotionActions: [],
             isAiThinking: false,
@@ -75,6 +79,11 @@ export class GameController {
 
         if (this.view.phase === 'resting') {
             this.chooseResting(row, col);
+            return;
+        }
+
+        if (this.view.phase === 'ramp-route') {
+            this.chooseRampRoute(row, col);
             return;
         }
 
@@ -98,6 +107,10 @@ export class GameController {
         }
 
         if (piece && ownerOf(piece) === this.state.currentPlayer) this.selectPiece(piece);
+    }
+
+    suppressBoardContextMenu(event) {
+        if (event.button === undefined || event.button === 2) event.preventDefault?.();
     }
 
     handlePromotionClick(event) {
@@ -198,6 +211,10 @@ export class GameController {
             return action.kind === 'move' && square?.r === row && square?.c === col;
         });
         if (candidates.length === 0) return false;
+        if (candidates[0]?.mode === 'knightRamp') {
+            this.chooseKnightRampRoute(candidates);
+            return true;
+        }
         this.commitOrPromote(candidates);
         return true;
     }
@@ -269,6 +286,32 @@ export class GameController {
         this.commitOrPromote(candidates);
     }
 
+    chooseKnightRampRoute(candidates) {
+        const routeKeys = uniqueSquareKeys(candidates.map((action) => rampRouteChoiceSquare(action)));
+        if (routeKeys.length > 1) {
+            this.view = {
+                ...this.view,
+                phase: 'ramp-route',
+                rampRouteCandidates: candidates,
+                highlights: {
+                    ...emptyHighlights(),
+                    rampRoutes: new Set(routeKeys),
+                },
+                phaseInfo: 'Choose the Knight ramp route.',
+            };
+            this.render();
+            return;
+        }
+        this.commitOrPromote(candidates);
+    }
+
+    chooseRampRoute(row, col) {
+        const key = `${row},${col}`;
+        const candidates = this.view.rampRouteCandidates.filter((action) => squareKey(rampRouteChoiceSquare(action)) === key);
+        if (candidates.length === 0) return;
+        this.commitOrPromote(candidates);
+    }
+
     chooseResting(row, col) {
         const key = `${row},${col}`;
         const candidates = this.view.stagedAttackCandidates.filter((action) => squareKey(action.rest) === key);
@@ -298,7 +341,7 @@ export class GameController {
         this.clearSelection();
         this.render();
         this.animator.animate(previous, action, this.settings.animationsEnabled);
-        this.maybeRunAiTurn({ startDelay: this.animationDelay() });
+        this.maybeRunAiTurn({ startDelay: this.animationDelay(action) });
     }
 
     skipSpecialMove() {
@@ -308,7 +351,7 @@ export class GameController {
         this.clearSelection();
         this.render();
         this.animator.animate(previous, this.state.lastAction, this.settings.animationsEnabled);
-        this.maybeRunAiTurn({ startDelay: this.animationDelay() });
+        this.maybeRunAiTurn({ startDelay: this.animationDelay(this.state.lastAction) });
     }
 
     newGame() {
@@ -351,7 +394,7 @@ export class GameController {
             this.view = { ...this.createEmptyView(), isAiThinking: this.state.currentPlayer === AI_COLOR };
             this.render();
             this.animator.animate(previous, action, this.settings.animationsEnabled);
-            await delay(this.animationDelay());
+            await delay(this.animationDelay(action));
         }
 
         this.isAiRunning = false;
@@ -379,8 +422,12 @@ export class GameController {
         return this.canHumanAct() && canSkipSpecialMove(this.state, this.state.currentPlayer);
     }
 
-    animationDelay() {
-        return this.settings.animationsEnabled ? 280 : 0;
+    animationDelay(action = null) {
+        if (!this.settings.animationsEnabled) return 0;
+        return Math.max(
+            ANIMATION_TIMING.turnAdvanceDelayMs,
+            moveAnimationDurationForAction(action) + 60,
+        );
     }
 }
 
@@ -395,6 +442,11 @@ function highlightsForActions(actions, selectedPiece) {
     highlights.moves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     highlights.rampMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     return highlights;
+}
+
+function rampRouteChoiceSquare(action) {
+    if (action.rampSequence?.length > 1) return action.rampSequence[0].land;
+    return action.to;
 }
 
 function uniqueSquareKeys(squares) {

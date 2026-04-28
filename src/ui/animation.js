@@ -1,10 +1,9 @@
 export const ANIMATION_TIMING = Object.freeze({
   effectDurationMs: 520,
-  moveDurationMs: 700,
-  doubleRampHopDurationMs: 550,
+  moveDurationMs: 800,
+  doubleRampHopDurationMs: 600,
   newPieceDurationMs: 260,
-  removedPieceDurationMs: 420,
-  panelPulseDurationMs: 420,
+  removedPieceDurationMs: 560,
   turnAdvanceDelayMs: 430,
 });
 
@@ -14,15 +13,15 @@ const {
   doubleRampHopDurationMs: DOUBLE_RAMP_HOP_DURATION,
   newPieceDurationMs: NEW_PIECE_DURATION,
   removedPieceDurationMs: REMOVED_PIECE_DURATION,
-  panelPulseDurationMs: PANEL_PULSE_DURATION,
 } = ANIMATION_TIMING;
 
 const MOVE_EASING = "cubic-bezier(.18,.82,.22,1)";
 
 export function moveAnimationDurationForAction(action = null) {
-  const hopCount = action?.mode === "knightRamp"
-    ? Math.max(1, action.rampSequence?.length ?? 1)
-    : 1;
+  const hopCount =
+    action?.mode === "knightRamp"
+      ? Math.max(1, action.rampSequence?.length ?? 1)
+      : 1;
   if (action?.mode === "knightRamp" && hopCount > 1) {
     return DOUBLE_RAMP_HOP_DURATION * hopCount;
   }
@@ -89,7 +88,10 @@ export class BoardAnimator {
       const dy = old.rect.top - newRect.top;
       if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
 
-      if (action?.mode === "knightRamp" && action.pieceId === pieceEl.dataset.pieceId) {
+      if (
+        action?.mode === "knightRamp" &&
+        action.pieceId === pieceEl.dataset.pieceId
+      ) {
         if (this.animateKnightRamp(pieceEl, old, action, previous)) continue;
       }
 
@@ -123,15 +125,23 @@ export class BoardAnimator {
   }
 
   animateKnightRamp(pieceEl, old, action, previous) {
-    if (!Array.isArray(action.rampSequence) || action.rampSequence.length === 0) {
+    if (
+      !Array.isArray(action.rampSequence) ||
+      action.rampSequence.length === 0
+    ) {
       return false;
     }
-    if (typeof pieceEl.getBoundingClientRect !== "function" || typeof pieceEl.animate !== "function") {
+    if (
+      typeof pieceEl.getBoundingClientRect !== "function" ||
+      typeof pieceEl.animate !== "function"
+    ) {
       return false;
     }
 
     const finalRect = pieceEl.getBoundingClientRect();
-    const routeRects = action.rampSequence.map((step) => previous.squares.get(squareKey(step.land)));
+    const routeRects = action.rampSequence.map((step) =>
+      previous.squares.get(squareKey(step.land)),
+    );
     if (routeRects.some((rect) => !rect)) return false;
 
     const squareEl = pieceEl.closest?.(".square");
@@ -145,11 +155,14 @@ export class BoardAnimator {
 
     squareEl?.classList.add("is-animating");
     pieceEl.classList.add("is-moving");
-    const animation = pieceEl.animate(normalMoveKeyframes(points[0], points[1], finalRect), {
-      duration: moveAnimationDurationForAction(action),
-      easing: MOVE_EASING,
-      fill: "none",
-    });
+    const animation = pieceEl.animate(
+      normalMoveKeyframes(points[0], points[1], finalRect),
+      {
+        duration: moveAnimationDurationForAction(action),
+        easing: MOVE_EASING,
+        fill: "none",
+      },
+    );
     const cleanup = () => {
       pieceEl.classList.remove("is-moving");
       squareEl?.classList.remove("is-animating");
@@ -175,7 +188,12 @@ export class BoardAnimator {
       }
       const isFinalHop = index === points.length - 2;
       const animation = pieceEl.animate(
-        doubleRampHopKeyframes(points[index], points[index + 1], finalRect, isFinalHop),
+        doubleRampHopKeyframes(
+          points[index],
+          points[index + 1],
+          finalRect,
+          isFinalHop,
+        ),
         {
           duration: DOUBLE_RAMP_HOP_DURATION,
           easing: MOVE_EASING,
@@ -234,12 +252,29 @@ export class BoardAnimator {
       this.boardEl.appendChild(ghost);
       const animation = ghost.animate?.(
         [
-          { opacity: 1, transform: "scale(1)", filter: "blur(0)" },
-          { opacity: 0.85, transform: "scale(1.16)", offset: 0.34 },
+          {
+            opacity: 1,
+            transform: "scale(1) translateY(0)",
+            filter: "drop-shadow(0 8px 10px rgba(0,0,0,0.42)) blur(0)",
+          },
+          {
+            opacity: 0.92,
+            transform: "scale(1.08) translateY(-4%)",
+            filter:
+              "drop-shadow(0 12px 16px rgba(0,0,0,0.46)) brightness(1.08)",
+            offset: 0.3,
+          },
+          {
+            opacity: 0.42,
+            transform: "scale(0.82) translateY(-10%) rotate(-2deg)",
+            filter:
+              "drop-shadow(0 5px 12px rgba(0,0,0,0.36)) blur(0.8px) saturate(0.9)",
+            offset: 0.68,
+          },
           {
             opacity: 0,
-            transform: "scale(0.66) rotate(5deg)",
-            filter: "blur(2px)",
+            transform: "scale(0.44) translateY(-18%) rotate(8deg)",
+            filter: "blur(4px) saturate(0.45)",
           },
         ],
         {
@@ -262,19 +297,20 @@ export class BoardAnimator {
 
   animateEffects(action) {
     if (!action) return;
-    if (action.kind === "move") this.pulseSquare(action.to, "move-land");
     if (action.kind === "attack") {
       this.pulseSquare(
         action.to,
         action.target?.hadShield ? "shield-hit" : "death-burst",
       );
-      this.pulseSquare(action.rest, "rest-settle");
     }
     if (action.mode === "heal") this.pulseSquare(action.to, "life-glow");
     if (action.mode === "kill") this.pulseSquare(action.to, "death-burst");
-    if (action.mode === "lifeDeathMove")
-      this.pulseSquare(action.to, "life-glow");
-    if (action.mode === "skipSpecial") this.pulsePanel();
+    if (action.mode === "lifeDeathMove") {
+      this.pulseSquare(
+        action.to,
+        action.pieceType === "Death" ? "death-move-glow" : "life-glow",
+      );
+    }
   }
 
   pulseSquare(square, className, duration = EFFECT_DURATION) {
@@ -302,18 +338,6 @@ export class BoardAnimator {
     const cleanup = () => effect.remove();
     effect.getAnimations?.()[0]?.finished.then(cleanup, cleanup);
     globalThis.setTimeout?.(cleanup, duration + 80);
-  }
-
-  pulsePanel() {
-    const panel = this.boardEl
-      .closest?.("#game-container")
-      ?.querySelector?.("#status-panel");
-    if (!panel) return;
-    panel.classList.add("skip-pulse");
-    globalThis.setTimeout?.(
-      () => panel.classList.remove("skip-pulse"),
-      PANEL_PULSE_DURATION,
-    );
   }
 }
 

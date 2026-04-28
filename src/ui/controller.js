@@ -59,7 +59,6 @@ export class GameController {
             phaseInfo: 'White to move. Select a piece.',
             highlights: emptyHighlights(),
             attackCandidates: [],
-            rampRouteCandidates: [],
             stagedAttackCandidates: [],
             promotionActions: [],
             isAiThinking: false,
@@ -79,11 +78,6 @@ export class GameController {
 
         if (this.view.phase === 'resting') {
             this.chooseResting(row, col);
-            return;
-        }
-
-        if (this.view.phase === 'ramp-route') {
-            this.chooseRampRoute(row, col);
             return;
         }
 
@@ -212,10 +206,10 @@ export class GameController {
         });
         if (candidates.length === 0) return false;
         if (candidates[0]?.mode === 'knightRamp') {
-            this.chooseKnightRampRoute(candidates);
-            return true;
+            this.commitOrPromote([chooseKnightRampAction(candidates)]);
+        } else {
+            this.commitOrPromote(candidates);
         }
-        this.commitOrPromote(candidates);
         return true;
     }
 
@@ -283,32 +277,6 @@ export class GameController {
             this.render();
             return;
         }
-        this.commitOrPromote(candidates);
-    }
-
-    chooseKnightRampRoute(candidates) {
-        const routeKeys = uniqueSquareKeys(candidates.map((action) => rampRouteChoiceSquare(action)));
-        if (routeKeys.length > 1) {
-            this.view = {
-                ...this.view,
-                phase: 'ramp-route',
-                rampRouteCandidates: candidates,
-                highlights: {
-                    ...emptyHighlights(),
-                    rampRoutes: new Set(routeKeys),
-                },
-                phaseInfo: 'Choose the Knight ramp route.',
-            };
-            this.render();
-            return;
-        }
-        this.commitOrPromote(candidates);
-    }
-
-    chooseRampRoute(row, col) {
-        const key = `${row},${col}`;
-        const candidates = this.view.rampRouteCandidates.filter((action) => squareKey(rampRouteChoiceSquare(action)) === key);
-        if (candidates.length === 0) return;
         this.commitOrPromote(candidates);
     }
 
@@ -444,9 +412,11 @@ function highlightsForActions(actions, selectedPiece) {
     return highlights;
 }
 
-function rampRouteChoiceSquare(action) {
-    if (action.rampSequence?.length > 1) return action.rampSequence[0].land;
-    return action.to;
+function chooseKnightRampAction(candidates) {
+    const shortestLength = Math.min(...candidates.map((action) => action.rampSequence?.length ?? 1));
+    const shortest = candidates.filter((action) => (action.rampSequence?.length ?? 1) === shortestLength);
+    if (shortest.length === 1) return shortest[0];
+    return shortest[Math.floor(Math.random() * shortest.length)];
 }
 
 function uniqueSquareKeys(squares) {

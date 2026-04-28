@@ -271,6 +271,8 @@ test('renderer exposes promotion choices when promotion actions are pending', ()
     renderer.render(state, { promotionActions });
 
     expect(renderer.promotionEl.hidden).toBe(false);
+    expect(renderer.promotionEl.className).toBe('promotion-dialog');
+    expect(renderer.promotionEl.attributes.role).toBe('dialog');
     expect(renderer.promotionEl.children[1].children).toHaveLength(2);
 
     globalThis.document = previousDocument;
@@ -305,6 +307,17 @@ test('renderer shows the full action history with player markers', () => {
             mode: 'skipSpecial',
             color: 'black',
         },
+        {
+            kind: 'attack',
+            mode: 'enPassant',
+            pieceType: 'Pawn',
+            color: 'black',
+            target: { color: 'white', type: 'Pawn', hadShield: true },
+            from: { r: 4, c: 3 },
+            to: { r: 5, c: 4 },
+            staging: { r: 4, c: 3 },
+            deathStaging: true,
+        },
     ];
 
     const status = makeStatusPanel();
@@ -319,13 +332,15 @@ test('renderer shows the full action history with player markers', () => {
     renderer.render(state, {});
 
     const history = status.querySelector('#action-history ol');
-    expect(history.children).toHaveLength(3);
+    expect(history.children).toHaveLength(4);
     expect(history.children[0].dataset.actionColor).toBe('white');
     expect(history.children[0].textContent).toContain('Pawn a2-a3');
     expect(history.children[1].dataset.actionColor).toBe('black');
     expect(history.children[1].className).toContain('player-break');
     expect(history.children[1].textContent).toContain('Pawn j9-j7');
     expect(history.children[2].textContent).toContain('Skipped Life/Death');
+    expect(history.children[3].textContent).toContain('Pawn breaks shield on white Pawn e5, attacker dies on Death');
+    expect(history.children[3].textContent).not.toContain('rests');
     expect(history.scrollTop).toBe(history.scrollHeight);
 
     globalThis.document = previousDocument;
@@ -420,7 +435,7 @@ test('renderer shows action history fade only when newer actions are hidden belo
     globalThis.document = previousDocument;
 });
 
-test('renderer flashes the player badge when the turn changes', () => {
+test('renderer flashes the player badge only when the turn reaches the player side', () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
         createElement: (tagName) => new FakeElement(tagName),
@@ -437,10 +452,13 @@ test('renderer flashes the player badge when the turn changes', () => {
         rulesEl: makeRulesPanel(),
     });
 
-    renderer.render(state, {});
+    renderer.render(state, { boardSide: COLORS.WHITE });
     expect(status.querySelector('#player-turn').className).not.toContain('turn-start-flash');
     state.currentPlayer = COLORS.BLACK;
-    renderer.render(state, {});
+    renderer.render(state, { boardSide: COLORS.WHITE });
+    expect(status.querySelector('#player-turn').className).not.toContain('turn-start-flash');
+    state.currentPlayer = COLORS.WHITE;
+    renderer.render(state, { boardSide: COLORS.WHITE });
     expect(status.querySelector('#player-turn').className).toContain('turn-start-flash');
 
     globalThis.document = previousDocument;
@@ -507,7 +525,7 @@ test('renderer dims the selected origin during rest choice unless it is restable
     globalThis.document = previousDocument;
 });
 
-test('controller asks for a Knight ramp route when a destination has multiple double-jump paths', () => {
+test('controller auto-selects one Knight ramp route when a destination has multiple double-jump paths', () => {
     const previousDocument = globalThis.document;
     const previousLocalStorage = globalThis.localStorage;
     globalThis.document = {
@@ -534,25 +552,63 @@ test('controller asks for a Knight ramp route when a destination has multiple do
     placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 8, { id: 'lower-ramp-b' }));
     controller.selectPiece(knight);
 
-    controller.handleBoardClick({
-        target: {
-            closest: () => ({ dataset: { row: '5', col: '9' } }),
-        },
-    });
-
-    expect(controller.view.phase).toBe('ramp-route');
-    expect([...controller.view.highlights.rampRoutes].sort()).toEqual(['3,7', '7,7']);
-
-    controller.handleBoardClick({
-        target: {
-            closest: () => ({ dataset: { row: '3', col: '7' } }),
-        },
-    });
+    const previousRandom = Math.random;
+    Math.random = () => 0.99;
+    try {
+        controller.handleBoardClick({
+            target: {
+                closest: () => ({ dataset: { row: '5', col: '9' } }),
+            },
+        });
+    } finally {
+        Math.random = previousRandom;
+    }
 
     expect(controller.state.board[5][9]?.id).toBe('knight');
-    expect(controller.state.lastAction.rampSequence[0].land).toEqual({ r: 3, c: 7 });
+    expect(controller.view.phase).toBe('select');
+    expect(controller.state.lastAction.rampSequence[0].land).toEqual({ r: 7, c: 7 });
     controller.settings.animationsEnabled = true;
     expect(controller.animationDelay(controller.state.lastAction)).toBe(ANIMATION_TIMING.doubleRampHopDurationMs * 2 + 60);
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller prefers a one-hop Knight ramp over a longer route to the same square', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const controller = new GameController({
+        boardEl: new FakeElement('div'),
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 5, 6, { id: 'single-ramp' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 5, { id: 'double-ramp-a' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 6, { id: 'double-ramp-b' }));
+    controller.selectPiece(knight);
+
+    controller.handleBoardClick({
+        target: {
+            closest: () => ({ dataset: { row: '5', col: '7' } }),
+        },
+    });
+
+    expect(controller.state.board[5][7]?.id).toBe('knight');
+    expect(controller.state.lastAction.rampSequence).toHaveLength(1);
+    expect(controller.state.lastAction.rampSequence[0].land).toEqual({ r: 5, c: 7 });
 
     globalThis.document = previousDocument;
     globalThis.localStorage = previousLocalStorage;
@@ -661,6 +717,39 @@ test('single Knight ramp keeps the normal ramp easing', () => {
 
     expect(animated.options.duration).toBe(ANIMATION_TIMING.moveDurationMs);
     expect(animated.options.easing).toBe('cubic-bezier(.18,.82,.22,1)');
+});
+
+test('board animator uses separate Life and Death move glow effects', () => {
+    const previousDocument = globalThis.document;
+    const appended = [];
+    globalThis.document = {
+        createElement: () => ({
+            style: {},
+            getAnimations: () => [],
+            remove() {},
+        }),
+    };
+
+    const square = {
+        getBoundingClientRect: () => ({ left: 12, top: 18, width: 40, height: 40 }),
+    };
+    const board = {
+        querySelector: () => square,
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 400 }),
+        appendChild: (element) => {
+            appended.push(element);
+            return element;
+        },
+    };
+    const animator = new BoardAnimator(board);
+
+    animator.animateEffects({ mode: 'lifeDeathMove', pieceType: PIECE_TYPES.LIFE, to: { r: 4, c: 3 } });
+    animator.animateEffects({ mode: 'lifeDeathMove', pieceType: PIECE_TYPES.DEATH, to: { r: 5, c: 4 } });
+
+    expect(appended[0].className).toBe('board-effect life-glow');
+    expect(appended[1].className).toBe('board-effect death-move-glow');
+
+    globalThis.document = previousDocument;
 });
 
 test('settings persist and AI slider maps to stronger search options', () => {

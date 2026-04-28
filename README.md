@@ -27,7 +27,8 @@ Chess Two inherits ordinary chess movement where the variant does not explicitly
 - Human plays White against AI Black by default.
 - Setting AI to `0` enables local self-play and unlocks side selection.
 - After using the standard move slot, a human player may skip the remaining Life/Death slot.
-- Direct `index.html` launch is supported through the checked-in browser bundle.
+- Direct `index.html` launch uses the checked-in root `chess-two.bundle.js`; Vite builds use the identical
+  `public/chess-two.bundle.js` copy so the bundle is copied into `dist`.
 
 ## Development
 

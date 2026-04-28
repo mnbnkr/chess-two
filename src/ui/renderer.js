@@ -26,7 +26,6 @@ export class Renderer {
     }
 
     render(state, view = {}) {
-        this.boardEl.classList.toggle('ai-thinking', Boolean(view.isAiThinking));
         this.renderBoard(state, view);
         this.renderCoordinates(view);
         this.renderStatus(state, view);
@@ -67,10 +66,15 @@ export class Renderer {
     renderStatus(state, view) {
         const playerTurnEl = this.statusPanelEl.querySelector('#player-turn');
         const previousPlayer = this.renderedPlayer;
+        const playerSide = view.boardSide ?? COLORS.WHITE;
         const keepFlash = previousPlayer === state.currentPlayer && playerTurnEl.className.includes('turn-start-flash');
+        const shouldFlashTurn = previousPlayer
+            && previousPlayer !== state.currentPlayer
+            && state.currentPlayer === playerSide
+            && !state.gameOver;
         playerTurnEl.textContent = playerName(state.currentPlayer);
         playerTurnEl.className = `player-turn ${state.currentPlayer}${keepFlash ? ' turn-start-flash' : ''}`;
-        if (previousPlayer && previousPlayer !== state.currentPlayer && !state.gameOver) {
+        if (shouldFlashTurn) {
             restartClassAnimation(playerTurnEl, 'turn-start-flash');
         }
         this.renderedPlayer = state.currentPlayer;
@@ -181,6 +185,9 @@ export class Renderer {
         }
 
         this.promotionEl.hidden = false;
+        this.promotionEl.className = 'promotion-dialog';
+        this.promotionEl.setAttribute('role', 'dialog');
+        this.promotionEl.setAttribute('aria-label', 'Choose promotion piece');
         const title = document.createElement('p');
         title.textContent = 'Promote pawn';
         this.promotionEl.appendChild(title);
@@ -291,7 +298,6 @@ function markerForSquare(row, col, view, highlights) {
     if (highlights.attacks.has(key)) classes.push('valid-attack');
     if (highlights.specials.has(key)) classes.push('valid-special');
     if (highlights.staging.has(key)) classes.push('valid-staging');
-    if (highlights.rampRoutes?.has(key)) classes.push('valid-ramp-route');
     if (isResting) classes.push('valid-resting');
     if (classes.length === 0) return null;
     const marker = document.createElement('span');
@@ -306,7 +312,6 @@ export function emptyHighlights() {
         attacks: new Set(),
         specials: new Set(),
         staging: new Set(),
-        rampRoutes: new Set(),
         resting: new Set(),
     };
 }
@@ -348,8 +353,9 @@ function describeAction(action) {
     if (action.kind === 'attack') {
         const target = `${action.target?.color ?? 'enemy'} ${action.target?.type ?? 'piece'}`;
         const hit = action.target?.hadShield ? 'breaks shield on' : 'takes';
+        const deathStaging = action.deathStaging ? ', attacker dies on Death' : '';
         const rest = action.rest ? `, rests ${squareLabel(action.rest.r, action.rest.c)}` : '';
-        return `${piece} ${hit} ${target} ${to}${rest}${suffix}`;
+        return `${piece} ${hit} ${target} ${to}${deathStaging}${rest}${suffix}`;
     }
     if (action.mode === 'heal') {
         return `Life shields ${action.target?.color ?? ''} ${action.target?.type ?? 'piece'} ${to}`;

@@ -103,7 +103,7 @@
                                 <li>Each turn has one standard move and one Life/Death move. Human players may skip the
                                     remaining Life/Death slot.</li>
                                 <li>Life can heal shieldless adjacent pieces. Death can kill adjacent dark-square
-                                    targets unless they have an adjacent light-square ally.</li>
+                                    targets unless they have an orthogonally adjacent ally.</li>
                                 <li>Life and Death are controlled by board half, can be passed through, and annihilate
                                     each other orthogonally. Death-hit attacks still land before the attacker dies.</li>
                                 <li>Attacks use a staging square. Killing blows choose a resting square.</li>
@@ -129,8 +129,6 @@
                 <div id="info-box">
                     <p id="phase-info">White's turn. Select a piece to begin.</p>
                 </div>
-                <div id="promotion-panel"
-                     hidden></div>
                 <div id="action-history"
                      class="action-history"
                      aria-live="polite">
@@ -144,6 +142,8 @@
         <div id="board-container">
             <div id="board-frame">
                 <div id="game-board"></div>
+                <div id="promotion-panel"
+                     hidden></div>
             </div>
             <div id="file-coordinates"
                  aria-hidden="true"></div>

@@ -575,6 +575,8 @@ function buildAttackActions(state, attacker, target, staging, details) {
         consumes: { standard: true, special: false },
     };
 
+    if (isDeathStaging) return [withActionId(base)];
+
     if (target.hasShield) {
         return [withActionId({ ...base, rest: { r: staging.r, c: staging.c } })];
     }
@@ -660,6 +662,7 @@ function generateDeathKillActions(state, piece) {
     for (const [dr, dc] of BISHOP_DIRS) {
         const target = getPiece(state.board, piece.row + dr, piece.col + dc);
         if (!target || target.isImmune || !isDarkSquare(target.row, target.col)) continue;
+        if (target.type === PIECE_TYPES.DEATH) continue;
         if (isProtectedFromDeath(target, state)) continue;
         actions.push(withActionId({
             kind: 'special',

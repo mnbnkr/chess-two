@@ -798,6 +798,8 @@
       deathStaging: isDeathStaging,
       consumes: { standard: true, special: false }
     };
+    if (isDeathStaging)
+      return [withActionId(base)];
     if (target.hasShield) {
       return [withActionId({ ...base, rest: { r: staging.r, c: staging.c } })];
     }
@@ -887,6 +889,8 @@
     for (const [dr, dc] of BISHOP_DIRS) {
       const target = getPiece(state.board, piece.row + dr, piece.col + dc);
       if (!target || target.isImmune || !isDarkSquare(target.row, target.col))
+        continue;
+      if (target.type === PIECE_TYPES.DEATH)
         continue;
       if (isProtectedFromDeath(target, state))
         continue;
@@ -1473,8 +1477,12 @@
       score += targetSign * 80000;
     if (action.kind === "attack")
       score += targetSign * attackActionValue(action);
-    if (action.mode === "kill")
-      score += targetSign * (650 + targetActionValue(action) * 1.75);
+    if (action.mode === "kill") {
+      const targetValue = targetActionValue(action);
+      score += targetSign * (850 + targetValue * 2.4);
+      if (targetOwner === color)
+        score -= 900 + targetValue * 1.35;
+    }
     if (action.mode === "heal")
       score += healActionValue(state, action, color);
     const actor = findPieceById(state, action.pieceId);
@@ -1520,16 +1528,25 @@
       return 0;
     let score = 0;
     if (action.kind === "attack") {
+      score += captureTacticalBonus(actor, action);
       score += shieldBreakTacticalBonus(after, actor, action, color);
       score += shieldTradeDiscipline(actor, action);
     }
     if (action.mode === "kill")
-      score += deathKillTacticalBonus(action);
+      score += deathKillTacticalBonus(action, color);
     if (action.mode === "heal")
       score += healTacticalBonus(action, color);
     score += defensiveRootScore(before, after, actor, action, color);
     score -= postActionExposurePenalty(after, action, color);
     return score * (settings.tacticalWeight ?? 1);
+  }
+  function captureTacticalBonus(actor, action) {
+    if (action.kind !== "attack" || action.target?.hadShield || action.target?.type === PIECE_TYPES.KING)
+      return 0;
+    const targetValue = MATERIAL_VALUES[action.target?.type] ?? 0;
+    const actorValue = MATERIAL_VALUES[actor?.type] ?? 0;
+    const favorableTrade = Math.max(0, targetValue - actorValue * 0.55);
+    return 150 + targetValue * 0.42 + favorableTrade * 0.34;
   }
   function shieldTradeDiscipline(actor, action) {
     if (!action.target?.hadShield || action.target?.type === PIECE_TYPES.KING)
@@ -1546,7 +1563,7 @@
     const targetShield = shieldPressureValue(action.target);
     const cheapness = Math.max(0, targetBase - actorBase * 0.6);
     const pawnLever = actor.type === PIECE_TYPES.PAWN ? 80 : 0;
-    let bonus = 70 + targetShield * 1.25 + cheapness * 0.45 + pawnLever;
+    let bonus = 90 + targetShield * 1.45 + targetBase * 0.16 + cheapness * 0.55 + pawnLever;
     const targetAfter = findPieceById(after, action.targetId);
     if (targetAfter && canBeHealedByOwner(after, targetAfter, oppositeColor(color))) {
       bonus *= 0.48;
@@ -1589,10 +1606,14 @@
   function isPriorityAction(action, context) {
     return action.target?.type === PIECE_TYPES.KING || action.kind === "attack" || action.mode === "kill" || action.mode === "heal" || Boolean(action.promotionType) || context?.threatenedIds?.has(action.pieceId) || context?.threatenedIds?.has(action.targetId);
   }
-  function deathKillTacticalBonus(action) {
+  function deathKillTacticalBonus(action, color) {
     if (action.mode !== "kill")
       return 0;
-    return 220 + targetActionValue(action) * 0.55;
+    const targetValue = targetActionValue(action);
+    if (ownerFromSnapshot(action.target) === color) {
+      return -(1800 + targetValue * 1.4);
+    }
+    return 320 + targetValue * 0.9;
   }
   function healTacticalBonus(action, color) {
     if (action.mode !== "heal")
@@ -1707,23 +1728,29 @@
   function threatPressure(ownActions, enemyActions) {
     const ownThreats = threatValue(ownActions);
     const enemyThreats = threatValue(enemyActions);
-    return ownThreats - enemyThreats * 1.15;
+    return ownThreats - enemyThreats * 1.25;
   }
   function threatValue(actions) {
-    let score = 0;
+    const threats = new Map;
     for (const action of actions) {
-      if (action.kind === "attack" || action.mode === "kill") {
-        score += action.target?.hadShield ? shieldPressureValue(action.target) : (MATERIAL_VALUES[action.target?.type] ?? 0) * 0.72;
-        if (action.target?.type === PIECE_TYPES.KING)
-          score += 3800;
+      if ((action.kind === "attack" || action.mode === "kill") && action.target) {
+        const risk = action.target?.type === PIECE_TYPES.KING ? 2600 : actionExposureValue(action) * (action.target?.hadShield ? 0.42 : 0.38);
+        const previous = threats.get(action.target.id) ?? 0;
+        if (risk > previous)
+          threats.set(action.target.id, risk);
       }
-      if (action.mode === "heal")
-        score += 42;
+      if (action.mode === "heal") {
+        const previous = threats.get(action.id) ?? 0;
+        threats.set(action.id, Math.max(previous, 22));
+      }
     }
+    let score = 0;
+    for (const risk of threats.values())
+      score += risk;
     return Math.min(score, 3600);
   }
   function shieldPressureValue(target) {
-    return 24 + shieldValueForType(target?.type) * 0.92 + (MATERIAL_VALUES[target?.type] ?? 0) * 0.035;
+    return 26 + shieldValueForType(target?.type) * 1.08 + (MATERIAL_VALUES[target?.type] ?? 0) * 0.1;
   }
   function controlScore(ownActions, enemyActions, color) {
     let score = 0;
@@ -1927,7 +1954,7 @@
   function materialSafetyScore(ownActions, enemyActions, color) {
     const ownExposure = exposureSummary(enemyActions, color);
     const enemyExposure = exposureSummary(ownActions, oppositeColor(color));
-    return enemyExposure.total * 0.95 + enemyExposure.urgent * 0.55 - ownExposure.total * 1.55 - ownExposure.urgent * 1.05;
+    return enemyExposure.total * 0.34 + enemyExposure.urgent * 0.2 - ownExposure.total * 1.82 - ownExposure.urgent * 1.2;
   }
   function healPotentialScore(state, color) {
     let score = 0;
@@ -2118,7 +2145,6 @@
       this.renderedPlayer = null;
     }
     render(state2, view = {}) {
-      this.boardEl.classList.toggle("ai-thinking", Boolean(view.isAiThinking));
       this.renderBoard(state2, view);
       this.renderCoordinates(view);
       this.renderStatus(state2, view);
@@ -2154,10 +2180,12 @@
     renderStatus(state2, view) {
       const playerTurnEl = this.statusPanelEl.querySelector("#player-turn");
       const previousPlayer = this.renderedPlayer;
+      const playerSide = view.boardSide ?? COLORS.WHITE;
       const keepFlash = previousPlayer === state2.currentPlayer && playerTurnEl.className.includes("turn-start-flash");
+      const shouldFlashTurn = previousPlayer && previousPlayer !== state2.currentPlayer && state2.currentPlayer === playerSide && !state2.gameOver;
       playerTurnEl.textContent = playerName(state2.currentPlayer);
       playerTurnEl.className = `player-turn ${state2.currentPlayer}${keepFlash ? " turn-start-flash" : ""}`;
-      if (previousPlayer && previousPlayer !== state2.currentPlayer && !state2.gameOver) {
+      if (shouldFlashTurn) {
         restartClassAnimation(playerTurnEl, "turn-start-flash");
       }
       this.renderedPlayer = state2.currentPlayer;
@@ -2248,6 +2276,9 @@
         return;
       }
       this.promotionEl.hidden = false;
+      this.promotionEl.className = "promotion-dialog";
+      this.promotionEl.setAttribute("role", "dialog");
+      this.promotionEl.setAttribute("aria-label", "Choose promotion piece");
       const title = document.createElement("p");
       title.textContent = "Promote pawn";
       this.promotionEl.appendChild(title);
@@ -2366,8 +2397,6 @@
       classes.push("valid-special");
     if (highlights.staging.has(key))
       classes.push("valid-staging");
-    if (highlights.rampRoutes?.has(key))
-      classes.push("valid-ramp-route");
     if (isResting)
       classes.push("valid-resting");
     if (classes.length === 0)
@@ -2383,7 +2412,6 @@
       attacks: new Set,
       specials: new Set,
       staging: new Set,
-      rampRoutes: new Set,
       resting: new Set
     };
   }
@@ -2421,8 +2449,9 @@
     if (action.kind === "attack") {
       const target = `${action.target?.color ?? "enemy"} ${action.target?.type ?? "piece"}`;
       const hit = action.target?.hadShield ? "breaks shield on" : "takes";
+      const deathStaging = action.deathStaging ? ", attacker dies on Death" : "";
       const rest = action.rest ? `, rests ${squareLabel(action.rest.r, action.rest.c)}` : "";
-      return `${piece} ${hit} ${target} ${to}${rest}${suffix}`;
+      return `${piece} ${hit} ${target} ${to}${deathStaging}${rest}${suffix}`;
     }
     if (action.mode === "heal") {
       return `Life shields ${action.target?.color ?? ""} ${action.target?.type ?? "piece"} ${to}`;
@@ -2488,11 +2517,10 @@
   // src/ui/animation.js
   var ANIMATION_TIMING = Object.freeze({
     effectDurationMs: 520,
-    moveDurationMs: 700,
-    doubleRampHopDurationMs: 550,
+    moveDurationMs: 800,
+    doubleRampHopDurationMs: 600,
     newPieceDurationMs: 260,
-    removedPieceDurationMs: 420,
-    panelPulseDurationMs: 420,
+    removedPieceDurationMs: 560,
     turnAdvanceDelayMs: 430
   });
   var {
@@ -2500,8 +2528,7 @@
     moveDurationMs: MOVE_DURATION,
     doubleRampHopDurationMs: DOUBLE_RAMP_HOP_DURATION,
     newPieceDurationMs: NEW_PIECE_DURATION,
-    removedPieceDurationMs: REMOVED_PIECE_DURATION,
-    panelPulseDurationMs: PANEL_PULSE_DURATION
+    removedPieceDurationMs: REMOVED_PIECE_DURATION
   } = ANIMATION_TIMING;
   var MOVE_EASING = "cubic-bezier(.18,.82,.22,1)";
   function moveAnimationDurationForAction(action = null) {
@@ -2685,12 +2712,27 @@
         ghost.style.height = `${old.rect.height}px`;
         this.boardEl.appendChild(ghost);
         const animation = ghost.animate?.([
-          { opacity: 1, transform: "scale(1)", filter: "blur(0)" },
-          { opacity: 0.85, transform: "scale(1.16)", offset: 0.34 },
+          {
+            opacity: 1,
+            transform: "scale(1) translateY(0)",
+            filter: "drop-shadow(0 8px 10px rgba(0,0,0,0.42)) blur(0)"
+          },
+          {
+            opacity: 0.92,
+            transform: "scale(1.08) translateY(-4%)",
+            filter: "drop-shadow(0 12px 16px rgba(0,0,0,0.46)) brightness(1.08)",
+            offset: 0.3
+          },
+          {
+            opacity: 0.42,
+            transform: "scale(0.82) translateY(-10%) rotate(-2deg)",
+            filter: "drop-shadow(0 5px 12px rgba(0,0,0,0.36)) blur(0.8px) saturate(0.9)",
+            offset: 0.68
+          },
           {
             opacity: 0,
-            transform: "scale(0.66) rotate(5deg)",
-            filter: "blur(2px)"
+            transform: "scale(0.44) translateY(-18%) rotate(8deg)",
+            filter: "blur(4px) saturate(0.45)"
           }
         ], {
           duration: REMOVED_PIECE_DURATION,
@@ -2709,20 +2751,16 @@
     animateEffects(action) {
       if (!action)
         return;
-      if (action.kind === "move")
-        this.pulseSquare(action.to, "move-land");
       if (action.kind === "attack") {
         this.pulseSquare(action.to, action.target?.hadShield ? "shield-hit" : "death-burst");
-        this.pulseSquare(action.rest, "rest-settle");
       }
       if (action.mode === "heal")
         this.pulseSquare(action.to, "life-glow");
       if (action.mode === "kill")
         this.pulseSquare(action.to, "death-burst");
-      if (action.mode === "lifeDeathMove")
-        this.pulseSquare(action.to, "life-glow");
-      if (action.mode === "skipSpecial")
-        this.pulsePanel();
+      if (action.mode === "lifeDeathMove") {
+        this.pulseSquare(action.to, action.pieceType === "Death" ? "death-move-glow" : "life-glow");
+      }
     }
     pulseSquare(square, className, duration = EFFECT_DURATION) {
       if (!square || !className)
@@ -2748,13 +2786,6 @@
       const cleanup = () => effect.remove();
       effect.getAnimations?.()[0]?.finished.then(cleanup, cleanup);
       globalThis.setTimeout?.(cleanup, duration + 80);
-    }
-    pulsePanel() {
-      const panel = this.boardEl.closest?.("#game-container")?.querySelector?.("#status-panel");
-      if (!panel)
-        return;
-      panel.classList.add("skip-pulse");
-      globalThis.setTimeout?.(() => panel.classList.remove("skip-pulse"), PANEL_PULSE_DURATION);
     }
   }
   function normalizeSnapshot(previous) {
@@ -2820,7 +2851,7 @@
     2: { label: "Level 2", maxDepth: 2, maxActions: 20, maxTacticalActions: 6, quiescenceDepth: 1, tacticalWeight: 0.75, thinkDelay: 35, timeLimitMs: 280, hardTimeLimitMs: 460 },
     3: { label: "Level 3", maxDepth: 3, maxActions: 24, maxTacticalActions: 8, quiescenceDepth: 1, tacticalWeight: 1, thinkDelay: 30, timeLimitMs: 950, hardTimeLimitMs: 1650 },
     4: { label: "Level 4", maxDepth: 4, maxActions: 20, maxTacticalActions: 7, quiescenceDepth: 1, tacticalWeight: 1.25, thinkDelay: 25, timeLimitMs: 1200, hardTimeLimitMs: 2000 },
-    5: { label: "Level 5", maxDepth: 5, maxActions: 14, maxTacticalActions: 7, quiescenceDepth: 2, tacticalWeight: 1.65, thinkDelay: 15, timeLimitMs: 2100, hardTimeLimitMs: 3000 }
+    5: { label: "Level 5", maxDepth: 5, maxActions: 30, maxTacticalActions: 12, quiescenceDepth: 2, tacticalWeight: 1.9, thinkDelay: 15, timeLimitMs: 2600, hardTimeLimitMs: 4200 }
   };
   function loadSettings(storage = globalThis.localStorage) {
     if (!storage)
@@ -2900,7 +2931,6 @@
         phaseInfo: "White to move. Select a piece.",
         highlights: emptyHighlights(),
         attackCandidates: [],
-        rampRouteCandidates: [],
         stagedAttackCandidates: [],
         promotionActions: [],
         isAiThinking: false
@@ -2918,10 +2948,6 @@
       }
       if (this.view.phase === "resting") {
         this.chooseResting(row, col);
-        return;
-      }
-      if (this.view.phase === "ramp-route") {
-        this.chooseRampRoute(row, col);
         return;
       }
       const piece = this.state.board[row][col];
@@ -3050,10 +3076,10 @@
       if (candidates.length === 0)
         return false;
       if (candidates[0]?.mode === "knightRamp") {
-        this.chooseKnightRampRoute(candidates);
-        return true;
+        this.commitOrPromote([chooseKnightRampAction(candidates)]);
+      } else {
+        this.commitOrPromote(candidates);
       }
-      this.commitOrPromote(candidates);
       return true;
     }
     trySpecial(row, col) {
@@ -3117,31 +3143,6 @@
         this.render();
         return;
       }
-      this.commitOrPromote(candidates);
-    }
-    chooseKnightRampRoute(candidates) {
-      const routeKeys = uniqueSquareKeys(candidates.map((action) => rampRouteChoiceSquare(action)));
-      if (routeKeys.length > 1) {
-        this.view = {
-          ...this.view,
-          phase: "ramp-route",
-          rampRouteCandidates: candidates,
-          highlights: {
-            ...emptyHighlights(),
-            rampRoutes: new Set(routeKeys)
-          },
-          phaseInfo: "Choose the Knight ramp route."
-        };
-        this.render();
-        return;
-      }
-      this.commitOrPromote(candidates);
-    }
-    chooseRampRoute(row, col) {
-      const key = `${row},${col}`;
-      const candidates = this.view.rampRouteCandidates.filter((action) => squareKey(rampRouteChoiceSquare(action)) === key);
-      if (candidates.length === 0)
-        return;
       this.commitOrPromote(candidates);
     }
     chooseResting(row, col) {
@@ -3271,10 +3272,12 @@
     highlights.rampMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     return highlights;
   }
-  function rampRouteChoiceSquare(action) {
-    if (action.rampSequence?.length > 1)
-      return action.rampSequence[0].land;
-    return action.to;
+  function chooseKnightRampAction(candidates) {
+    const shortestLength = Math.min(...candidates.map((action) => action.rampSequence?.length ?? 1));
+    const shortest = candidates.filter((action) => (action.rampSequence?.length ?? 1) === shortestLength);
+    if (shortest.length === 1)
+      return shortest[0];
+    return shortest[Math.floor(Math.random() * shortest.length)];
   }
   function uniqueSquareKeys(squares) {
     return [...new Set(squares.filter(Boolean).map((square) => squareKey(square)))];

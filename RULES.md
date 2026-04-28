@@ -131,7 +131,7 @@ Special actions:
 - The Life heal target must be shieldless, able to have a Shield, not immune, and not Intimidated.
 - Life heal gives the target a Shield and one-turn immunity.
 - Death kill targets an adjacent diagonal piece on a dark square, friendly or enemy.
-- The Death kill target must not be immune.
+- The Death kill target must not be immune and must not be another Death piece.
 - Death kill is blocked if the target has an allied protector orthogonally adjacent to it.
 - Death moves onto the target square and destroys the target.
 

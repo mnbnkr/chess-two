@@ -221,6 +221,7 @@ test('Death can be used as a fatal attack staging square', () => {
     expect(state.board[5][5]?.id).toBe('target');
     expect(state.board[5][5].hasShield).toBe(false);
     expect(state.board.flat().some((piece) => piece?.id === 'rook')).toBe(false);
+    expect(attack.rest).toBe(undefined);
 });
 
 test('ranged attacks use staging and resting choices for killing blows', () => {
@@ -399,6 +400,16 @@ test('Death kill is blocked by orthogonal allied protection', () => {
     expect(generateLegalActions(state).some((action) => action.mode === 'kill')).toBe(false);
     state.board[4][5] = null;
     expect(generateLegalActions(state).some((action) => action.mode === 'kill')).toBe(true);
+});
+
+test('Death cannot kill another Death piece', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 4, { id: 'death' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 3, 3, { id: 'owned-death' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 5, 5, { id: 'opponent-death' }));
+
+    const kills = generateLegalActions(state).filter((action) => action.mode === 'kill');
+    expect(kills.some((action) => action.target?.type === PIECE_TYPES.DEATH)).toBe(false);
 });
 
 test('nearest-rook castling is available when the rank is clear', () => {
@@ -608,6 +619,59 @@ test('stronger AI prefers a cheap pawn shield break over quiet Life or Death gat
     expect(action.targetId).toBe('tactical-bishop');
 });
 
+test('AI takes a loose Queen instead of only threatening it', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 5, { id: 'black-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 5, { id: 'white-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.BISHOP, COLORS.BLACK, 6, 1, { id: 'bishop' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.QUEEN, COLORS.WHITE, 3, 4, { id: 'queen' }));
+
+    expect(generateLegalActions(state).some((action) => (
+        action.pieceId === 'bishop'
+        && action.kind === 'attack'
+        && action.targetId === 'queen'
+    ))).toBe(true);
+
+    const action = chooseAiAction(state, COLORS.BLACK, {
+        maxDepth: 1,
+        maxActions: 10,
+        tacticalWeight: 1,
+    });
+
+    expect(action.pieceId).toBe('bishop');
+    expect(action.kind).toBe('attack');
+    expect(action.targetId).toBe('queen');
+});
+
+test('AI rescues an endangered Bishop when no stronger tactic is available', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 5, { id: 'black-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 0, { id: 'white-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.BISHOP, COLORS.BLACK, 5, 5, {
+        id: 'bishop',
+        hasShield: false,
+    }));
+    placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 5, 0, {
+        id: 'white-rook',
+        hasShield: false,
+    }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 1, 1, { id: 'quiet-pawn' }));
+
+    expect(generateLegalActions(state, COLORS.WHITE, { respectTurn: false }).some((action) => (
+        action.targetId === 'bishop'
+    ))).toBe(true);
+
+    const action = chooseAiAction(state, COLORS.BLACK, {
+        maxDepth: 1,
+        maxActions: 2,
+        maxTacticalActions: 3,
+        tacticalWeight: 1,
+    });
+
+    expect(action.pieceId).toBe('bishop');
+    expect(action.kind).toBe('move');
+});
+
 test('AI avoids handing Life or Death pieces across the ownership line in quiet positions', () => {
     const state = createEmptyState(COLORS.BLACK);
     placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 4, { id: 'death' }));
@@ -643,6 +707,42 @@ test('AI prioritizes a Death kill on valuable material', () => {
 
     expect(action.mode).toBe('kill');
     expect(action.targetId).toBe('rook');
+});
+
+test('AI prefers an enemy Queen Death kill over killing its own piece', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 0, { id: 'black-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 9, { id: 'white-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 4, { id: 'death' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.QUEEN, COLORS.WHITE, 3, 3, { id: 'queen' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 5, 5, { id: 'own-pawn' }));
+
+    const action = chooseAiAction(state, COLORS.BLACK, {
+        maxDepth: 2,
+        maxActions: 10,
+        tacticalWeight: 1.9,
+    });
+
+    expect(action.mode).toBe('kill');
+    expect(action.targetId).toBe('queen');
+});
+
+test('AI avoids Death self-kills when a quiet Death move is available', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 0, { id: 'black-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 9, { id: 'white-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 4, { id: 'death' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 3, { id: 'own-pawn' }));
+
+    expect(generateLegalActions(state).some((action) => action.mode === 'kill' && action.targetId === 'own-pawn')).toBe(true);
+
+    const action = chooseAiAction(state, COLORS.BLACK, {
+        maxDepth: 2,
+        maxActions: 10,
+        tacticalWeight: 1.9,
+    });
+
+    expect(action.mode === 'kill' && action.targetId === 'own-pawn').toBe(false);
 });
 
 test('AI Life healing prefers owned shieldless pieces over enemy pieces', () => {

@@ -1,8 +1,10 @@
 :root {
-  --board-size: min(72vh, 640px);
+  --board-size: min(86vh, 640px);
   --square-size: calc(var(--board-size) / 10);
   --coordinate-row-height: clamp(18px, 2.4vh, 24px);
   --coordinate-font-size: clamp(10px, 1.3vh, 13px);
+  --layout-gap: 30px;
+  --page-padding-inline: 20px;
   --side-panel-raise: 52px;
   --settings-option-gap: 16px;
   --action-history-offset: -2px;
@@ -72,8 +74,9 @@ body {
 }
 
 #game-container {
-  display: flex;
-  gap: 30px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--board-size) minmax(0, 1fr);
+  gap: 20px var(--layout-gap);
   align-items: flex-start;
   min-height: 100vh;
   padding: max(
@@ -82,14 +85,17 @@ body {
         (100vh - var(--board-size) - var(--coordinate-row-height) - 18px) / 2
       )
     )
-    20px 20px;
-  max-width: 1180px;
+    var(--page-padding-inline) 20px;
   width: 100%;
   box-sizing: border-box;
-  justify-content: center;
+  justify-content: stretch;
+  justify-items: center;
 }
 
 #ui-panel {
+  grid-column: 3;
+  justify-self: start;
+  order: 2;
   width: 280px;
   text-align: center;
   background-color: var(--panel-bg);
@@ -301,7 +307,7 @@ body {
 
 .skip-button {
   min-width: 78px;
-  margin-left: auto;
+  margin-right: auto;
 }
 
 .rules-button {
@@ -337,6 +343,16 @@ body {
 
 .rules-panel {
   width: min(292px, calc(100vw - 48px));
+}
+
+.settings-anchor .settings-panel,
+.rules-anchor .rules-panel {
+  right: 0;
+  left: auto;
+}
+
+.rules-anchor .rules-panel {
+  right: -48px;
 }
 
 .settings-panel[hidden],
@@ -586,7 +602,9 @@ body {
 
 #board-container {
   position: relative;
+  grid-column: 2;
   flex: 0 0 auto;
+  order: 1;
 }
 
 #board-frame {
@@ -646,8 +664,13 @@ body {
   padding: 0;
   font: inherit;
   line-height: 1;
-  cursor: pointer;
+  cursor: default;
   overflow: visible;
+}
+
+.square.has-piece,
+.square.is-actionable {
+  cursor: pointer;
 }
 
 .square.is-animating {
@@ -1151,9 +1174,25 @@ body {
   outline-offset: 2px;
 }
 
+@media screen and (max-width: 1380px) {
+  #game-container {
+    display: flex;
+    gap: var(--layout-gap);
+    justify-content: center;
+  }
+
+  #board-container {
+    order: 1;
+  }
+
+  #ui-panel {
+    order: 2;
+  }
+}
+
 @media screen and (max-width: 1024px) {
   :root {
-    --board-size: min(92vw, 560px, 68vh);
+    --board-size: min(92vw, 560px, 84vh);
     --side-panel-raise: 0px;
   }
 
@@ -1173,6 +1212,15 @@ body {
     width: var(--board-size);
     box-sizing: border-box;
     margin-top: 0;
+  }
+
+  #ui-panel h1 {
+    order: 2;
+    margin: 16px 0 0;
+  }
+
+  #status-panel {
+    order: 1;
   }
 
   .settings-panel,

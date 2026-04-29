@@ -10,7 +10,7 @@ This file is the canonical rule prompt for Chess Two. Game logic, UI behavior, t
 - White begins on ranks 1 and 2. Black begins on ranks 9 and 10.
 - Human-vs-AI mode defaults to human White against AI Black.
 - AI level `0` means no AI; the same local player may play both sides.
-- After using the standard move slot, a human player may skip the remaining Life/Death slot. This is an intentional game rule, not merely a UI shortcut.
+- After using the standard move slot, a player may skip the remaining Life/Death slot. This is an intentional game rule, not merely a UI shortcut.
 
 ## Board And Setup
 
@@ -66,7 +66,7 @@ Standard pieces use ordinary chess movement patterns unless changed here.
 - Passing through Life or Death triggers the matching pass-through effect.
 - A standard piece may not remain on a Life square after a normal move.
 - A standard piece may choose a Death-occupied square as the final square of a normal move; the Death piece remains, and the moving piece is removed immediately after the move resolves.
-- Any successful attack counts as moving the attacker for first-move and castling tracking, even when the attacker was already on its staging square.
+- Any successful attack counts as moving the attacker for first-move and castling tracking, even when the attacker was already adjacent to the target.
 
 ## Pawns
 
@@ -74,7 +74,7 @@ Standard pieces use ordinary chess movement patterns unless changed here.
 - If a Pawn advanced only one square from its home rank and is on rank 3 for White or rank 8 for Black, it may still advance 1 or 2 empty squares forward.
 - Pawns can advance through Life and Death pieces as pass-through squares. Their final landing square must be empty unless it is a Death-occupied square chosen as a fatal final square.
 - Pawn attacks are diagonal and use the attack system.
-- Variant en passant is available only as the immediate reply. If a Pawn advanced multiple squares and crossed an enemy Pawn's diagonal attack square, that enemy Pawn may attack it using the crossed square as the staging or landing square.
+- Variant en passant is available only as the immediate standard reply. The eligible player may use a Life/Death action first, but the en passant right expires if that player takes any other standard action before using it. If a Pawn advanced multiple squares and crossed an enemy Pawn's diagonal attack square, that enemy Pawn may attack it. The crossed square is the staging square for a Shield break, or a pass-through square on a killing blow.
 - On the opponent's half of the board, a Pawn directly blocked by an enemy-controlled Life or Death piece may jump over it to the empty square immediately beyond it. The jumped Life/Death piece applies its pass-through effect.
 - Promotion is mandatory when a surviving Pawn ends on the far rank. The player chooses Queen, Rook, Bishop, or Knight.
 - A promoted piece inherits the Pawn's immunity and Shield state, except a promoted Queen is always unshielded.
@@ -87,9 +87,9 @@ Pawn jump example:
 
 ## Knights
 
-Knights have two standard-move modes (mutually exclusive):
+Knights have two standard-action modes (mutually exclusive):
 
-1. Normal move: the usual L-shaped move to an empty square, or an L-shaped attack using the attack system.
+1. L-shaped attack: the usual Knight L shape is legal only when attacking an enemy piece through the attack system.
 2. Ramp jump: a non-attacking jump over an adjacent piece to the empty square immediately beyond it.
 
 Ramp rules:
@@ -98,7 +98,7 @@ Ramp rules:
 - Life and Death pieces cannot be used as ramps.
 - A Knight may make up to two ramp jumps in one standard move.
 - A Knight cannot land on a square it already occupied during the current move.
-- The UI may show normal moves and ramp jumps at the same time; clicking the destination determines which move type is used.
+- Knights cannot use their L-shaped pattern to move to an empty square. Their non-attacking moves to empty squares come only from ramp jumps.
 
 ## Castling And Check
 
@@ -123,7 +123,7 @@ Pass-through effects:
 - Passing through Life gives the moving piece a Shield only if it can have a Shield, does not already have one, is not immune, and is not Intimidated.
 - Passing through Death removes the moving piece's Shield. If it has no Shield and no immunity during a normal move, the piece is destroyed during path resolution.
 - During an attack, Death pass-through does not stop the blow. The attack resolves first, then the attacker is removed if Death destroyed it on the way.
-- A Death-occupied square may be used as an attack staging square. The attack resolves, then the attacker is removed from the board regardless of Shield.
+- A Death-occupied square may be used as a Shield-break staging square. The attack resolves, then the attacker is removed from the board regardless of Shield.
 
 Special actions:
 
@@ -143,44 +143,47 @@ To attack, a player selects a piece and then an enemy target that lies on that p
 
 General attack rules:
 
-- An attack needs a valid staging square.
-- A staging square is usually an empty square adjacent to the target that the attacker can use to deliver the attack.
-- A Death-occupied square can also be chosen as a staging square; this is always fatal to the attacker after the attack resolves.
-- For sliding pieces, the staging square is along the attack line next to the target.
-- For Pawns and Kings, the attacker may already be the staging piece from its current square.
-- For Knights, the game finds valid empty or Death-occupied staging squares adjacent to the target from which the Knight could deliver its L-shaped attack.
-- If multiple staging squares work, the player chooses one.
+- A Shield break needs a valid staging square.
+- A staging square is usually an empty square adjacent to the target that the attacker can use to deliver the Shield break.
+- A Death-occupied square can also be chosen as a Shield-break staging square; this is always fatal to the attacker after the attack resolves.
+- For sliding Shield breaks, the staging square is along the attack line next to the target.
+- For Pawn and King Shield breaks, the attacker may already be the staging piece from its current square.
+- For Knight Shield breaks, the game finds valid empty or Death-occupied staging squares adjacent to the target from which the Knight could deliver its L-shaped attack.
+- If multiple Shield-break staging squares work, the player chooses one.
+- A killing blow against an unshielded target does not choose a staging square. The attack is performed on the target's square, the target is removed, and the attacker rests on that vacated square.
+- Life and Death pass-through effects still apply along the attack path before the target square. Death can remove the attacker only after the killing blow resolves.
 
 Shielded target:
 
 1. The player selects the attacker and target.
 2. The target loses its Shield.
-3. The attacker ends on the staging square.
+3. The attacker ends on the staging square, unless the staging square was Death-occupied and removes the attacker after the Shield break resolves.
 
 Unshielded target:
 
 1. The player selects the attacker and target.
-2. The target is removed.
-3. The game enters a resting phase.
-4. The attacker must rest either on the staging square or on the target's vacated square.
+2. No staging square is chosen.
+3. The target is removed.
+4. The attacker must rest on the target's vacated square, unless Death pass-through removes the attacker after the blow resolves.
 
 Rook attack example:
 
 - A White Rook on `b1` attacks a shieldless Black Rook on `b8`.
 - The White player selects the Rook on `b1`, then the target on `b8`.
-- Since `b7` is empty, `b7` is the staging square and the attack is valid.
+- The path to `b8` must be clear except for pass-through Life or Death pieces.
 - The Black Rook is removed.
-- The UI prompts the White player to place the attacking Rook on either `b7` or the vacated `b8`, concluding the move.
+- The attacking Rook rests on the vacated `b8`, concluding the move.
 
 Knight attack example:
 
 - A White Knight on `c2` attacks a Black Pawn on `d4`.
 - The possible staging squares adjacent to `d4` from which a Knight could deliver that L-shaped attack are `c4` and `d3`.
 - The White player selects the Knight on `c2`, then the target on `d4`.
-- At least one of `c4` or `d3` must be empty.
-- If both are empty, the player must first choose which staging square to use.
+- At least one of `c4` or `d3` must be empty or Death-occupied.
+- If more than one staging square is valid and the Pawn is shielded, the player must first choose which staging square to use.
 - If the Pawn on `d4` has a Shield, the Shield is removed and the Knight ends on the chosen staging square.
-- If the Pawn on `d4` has no Shield, the Pawn is removed and the Knight must rest on either the chosen staging square or `d4`.
+- If the Pawn on `d4` has no Shield, no staging choice is made. The Pawn is removed and the Knight must rest on `d4`.
+- If the Knight's killing-blow path crosses Life or Death squares, those pass-through effects still apply. For example, a Knight attacking from `c5` to a shieldless target on `d7` passes through `c6` and `d6`; Death on `c6` removes the Knight's Shield or destroys it after the target is removed.
 
 ## AI And Engine Expectations
 
@@ -188,7 +191,8 @@ The AI must reason over Chess Two legality, not normal chess capture rules. In p
 
 - Two-slot turns.
 - Hybrid standard and Life/Death actions.
-- Staging and resting.
+- Skipping a remaining Life/Death slot after the standard slot has been used.
+- Shield-break staging and target-square killing blows.
 - Shields, immunity, intimidation, and pass-through effects.
 - Shields as second-life material: cheap attacks that remove Shields from valuable pieces are often real tactical gains, unless Life can promptly repair them.
 - Death pass-through and Death-staging attacks resolving before attacker removal.

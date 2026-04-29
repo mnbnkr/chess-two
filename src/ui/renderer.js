@@ -52,11 +52,15 @@ export class Renderer {
 
                 const piece = state.board[r][c];
                 if (piece) {
+                    square.classList.add('has-piece');
                     square.appendChild(renderPiece(piece, state));
                 }
 
                 const marker = markerForSquare(r, c, view, highlights);
-                if (marker) square.appendChild(marker);
+                if (marker) {
+                    square.classList.add('is-actionable');
+                    square.appendChild(marker);
+                }
 
                 this.boardEl.appendChild(square);
             }

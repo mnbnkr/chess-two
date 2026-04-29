@@ -73,6 +73,9 @@ export function generateLegalActions(state, color = state.currentPlayer, options
         if (ownerOf(piece) !== color) continue;
         actions.push(...generatePieceActions(state, piece, { respectTurn }));
     }
+    if (respectTurn && options.includeSkip !== false && canSkipSpecialMoveFromActions(state, color, actions)) {
+        actions.push(buildSkipSpecialAction(state, color));
+    }
     return sortActions(actions);
 }
 
@@ -111,25 +114,38 @@ export function getActionsForPiece(state, pieceId) {
 }
 
 export function canSkipSpecialMove(state, color = state.currentPlayer) {
-    if (state.gameOver || state.currentPlayer !== color) return false;
-    if (!state.turn.standardMoveMade || state.turn.specialMoveMade) return false;
-    return generateLegalActions(state, color).some((action) => action.consumes?.special);
+    return canSkipSpecialMoveFromActions(
+        state,
+        color,
+        generateLegalActions(state, color, { includeSkip: false }),
+    );
 }
 
-export function skipHumanSpecialMove(state, color = COLORS.WHITE) {
+export function skipSpecialMove(state, color = state.currentPlayer) {
     const next = cloneState(state);
     if (!canSkipSpecialMove(next, color)) return next;
+    const action = buildSkipSpecialAction(next, color);
     next.turn.specialMoveMade = true;
-    next.lastAction = {
-        id: `skip-special|${color}|${next.moveNumber}`,
+    next.lastAction = action;
+    recordAction(next, next.lastAction);
+    normalizeTurn(next);
+    return next;
+}
+
+function buildSkipSpecialAction(state, color) {
+    return {
+        id: `skip-special|${color}|${state.moveNumber}`,
         kind: 'skip',
         mode: 'skipSpecial',
         color,
         consumes: { standard: false, special: true },
     };
-    recordAction(next, next.lastAction);
-    normalizeTurn(next);
-    return next;
+}
+
+function canSkipSpecialMoveFromActions(state, color, actions) {
+    if (state.gameOver || state.currentPlayer !== color) return false;
+    if (!state.turn.standardMoveMade || state.turn.specialMoveMade) return false;
+    return actions.some((action) => action.consumes?.special);
 }
 
 function generateStandardMoves(state, piece) {
@@ -300,25 +316,6 @@ function generateKingMoves(state, piece) {
 
 function generateKnightMoves(state, piece) {
     const actions = [];
-    for (const [dr, dc] of KNIGHT_DELTAS) {
-        const to = { r: piece.row + dr, c: piece.col + dc };
-        if (!isValidSquare(to.r, to.c)) continue;
-        const occupant = getPiece(state.board, to.r, to.c);
-        const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
-        if (occupant && !deathLanding) continue;
-        actions.push(withActionId({
-            kind: 'move',
-            mode: 'knightStep',
-            pieceId: piece.id,
-            pieceType: piece.type,
-            from: { r: piece.row, c: piece.col },
-            to,
-            path: knightPassThroughSquares(piece, to),
-            deathLanding,
-            consumes: { standard: true, special: false },
-        }));
-    }
-
     for (const jump of knightRampDestinations(state, piece)) {
         actions.push(withActionId({
             kind: 'move',
@@ -474,6 +471,7 @@ function generateEnPassantActions(state, piece) {
         actions.push(...buildAttackActions(state, piece, target, crossed, {
             mode: 'enPassant',
             path: [],
+            killPath: crossedOccupant ? [{ r: crossed.r, c: crossed.c }] : [],
         }));
     }
     return actions;
@@ -503,6 +501,16 @@ function generateKnightAttacks(state, piece) {
     for (const [dr, dc] of KNIGHT_DELTAS) {
         const target = getPiece(state.board, piece.row + dr, piece.col + dc);
         if (!isAttackTarget(piece, target)) continue;
+        if (!target.hasShield) {
+            actions.push(...buildAttackActions(state, piece, target, {
+                r: target.row,
+                c: target.col,
+            }, {
+                mode: 'knightAttack',
+                path: knightPassThroughSquares(piece, target),
+            }));
+            continue;
+        }
         for (const staging of knightStagingSquares(state, piece, target)) {
             actions.push(...buildAttackActions(state, piece, target, staging, {
                 mode: 'knightAttack',
@@ -528,11 +536,16 @@ function generateSlidingAttacks(state, piece, directions) {
             };
             if (staging.r !== piece.row || staging.c !== piece.col) {
                 const stagingOccupant = getPiece(state.board, staging.r, staging.c);
-                if (stagingOccupant && stagingOccupant.type !== PIECE_TYPES.DEATH) break;
+                if (target.hasShield) {
+                    if (stagingOccupant && stagingOccupant.type !== PIECE_TYPES.DEATH) break;
+                } else if (stagingOccupant && !LIFE_DEATH_PIECES.has(stagingOccupant.type)) {
+                    break;
+                }
             }
             actions.push(...buildAttackActions(state, piece, target, staging, {
                 mode: 'rangedAttack',
                 path: linePath({ r: piece.row, c: piece.col }, staging),
+                killPath: linePath({ r: piece.row, c: piece.col }, { r: target.row, c: target.col }),
             }));
             break;
         }
@@ -548,10 +561,12 @@ function isAttackTarget(attacker, target) {
 
 function buildAttackActions(state, attacker, target, staging, details) {
     if (!isValidSquare(staging.r, staging.c)) return [];
-    const stagingOccupant = getPiece(state.board, staging.r, staging.c);
+    const targetSquare = { r: target.row, c: target.col };
+    const isKillingBlow = !target.hasShield;
+    const stagingOccupant = isKillingBlow ? null : getPiece(state.board, staging.r, staging.c);
     const isAdjacentStaging = staging.r === attacker.row && staging.c === attacker.col;
-    const isDeathStaging = stagingOccupant?.type === PIECE_TYPES.DEATH;
-    if (!isAdjacentStaging && stagingOccupant && !isDeathStaging) return [];
+    const isDeathStaging = !isKillingBlow && stagingOccupant?.type === PIECE_TYPES.DEATH;
+    if (!isKillingBlow && !isAdjacentStaging && stagingOccupant && !isDeathStaging) return [];
 
     const base = {
         kind: 'attack',
@@ -569,25 +584,30 @@ function buildAttackActions(state, attacker, target, staging, details) {
         },
         from: { r: attacker.row, c: attacker.col },
         to: { r: target.row, c: target.col },
-        staging: { r: staging.r, c: staging.c },
-        path: details.path ?? [],
+        path: isKillingBlow ? (details.killPath ?? details.path ?? []) : (details.path ?? []),
         deathStaging: isDeathStaging,
         consumes: { standard: true, special: false },
     };
 
-    if (isDeathStaging) return [withActionId(base)];
-
-    if (target.hasShield) {
-        return [withActionId({ ...base, rest: { r: staging.r, c: staging.c } })];
+    if (isDeathStaging) {
+        return [withActionId({
+            ...base,
+            staging: { r: staging.r, c: staging.c },
+        })];
     }
 
-    return [
-        withActionId({ ...base, rest: { r: staging.r, c: staging.c } }),
-        ...promotionVariants(state, attacker, {
+    if (!isKillingBlow) {
+        return [withActionId({
             ...base,
-            rest: { r: target.row, c: target.col },
-        }).map(withActionId),
-    ];
+            staging: { r: staging.r, c: staging.c },
+            rest: { r: staging.r, c: staging.c },
+        })];
+    }
+
+    return promotionVariants(state, attacker, {
+        ...base,
+        rest: targetSquare,
+    }).map(withActionId);
 }
 
 function knightStagingSquares(state, knight, target) {
@@ -606,6 +626,28 @@ function knightStagingSquares(state, knight, target) {
         const occupant = getPiece(state.board, square.r, square.c);
         return !occupant || occupant.type === PIECE_TYPES.DEATH;
     });
+}
+
+function knightPassThroughSquares(knight, target) {
+    const dr = target.row - knight.row;
+    const dc = target.col - knight.col;
+    const rowStep = Math.sign(dr);
+    const colStep = Math.sign(dc);
+    let path = [];
+
+    if (Math.abs(dr) === 2 && Math.abs(dc) === 1) {
+        path = [
+            { r: knight.row + rowStep, c: knight.col },
+            { r: knight.row + rowStep, c: knight.col + colStep },
+        ];
+    } else if (Math.abs(dr) === 1 && Math.abs(dc) === 2) {
+        path = [
+            { r: knight.row, c: knight.col + colStep },
+            { r: knight.row + rowStep, c: knight.col + colStep },
+        ];
+    }
+
+    return path.filter((square) => isValidSquare(square.r, square.c));
 }
 
 function generateLifeDeathMoves(state, piece) {
@@ -992,24 +1034,6 @@ function linePath(from, to) {
         c += dc;
     }
     return path;
-}
-
-function knightPassThroughSquares(piece, to) {
-    const dr = to.r - piece.row;
-    const dc = to.c - piece.col;
-    if (Math.abs(dr) === 2 && Math.abs(dc) === 1) {
-        return [
-            { r: piece.row + Math.sign(dr), c: piece.col },
-            { r: piece.row + Math.sign(dr), c: to.c },
-        ];
-    }
-    if (Math.abs(dr) === 1 && Math.abs(dc) === 2) {
-        return [
-            { r: piece.row, c: piece.col + Math.sign(dc) },
-            { r: to.r, c: piece.col + Math.sign(dc) },
-        ];
-    }
-    return [];
 }
 
 function dedupeActions(actions) {

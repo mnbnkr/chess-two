@@ -13,7 +13,7 @@ import {
     normalizeTurn,
     ownerOf,
     placePiece,
-    skipHumanSpecialMove,
+    skipSpecialMove,
     updateIntimidation,
 } from '../src/engine/index.js';
 
@@ -75,7 +75,7 @@ test('three-square pawn advances expose every crossed square to en passant', () 
     ]);
 });
 
-test('variant en passant can use a Death-occupied crossed square as fatal staging', () => {
+test('variant en passant killing blows still apply Death-occupied crossed square pass-through', () => {
     let state = createEmptyState(COLORS.WHITE);
     placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 8, 4, { id: 'white-pawn' }));
     placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 6, 3, { id: 'black-pawn' }));
@@ -86,15 +86,51 @@ test('variant en passant can use a Death-occupied crossed square as fatal stagin
 
     const enPassant = actionMatching(state, (action) => (
         action.mode === 'enPassant'
-        && action.deathStaging
-        && action.staging.r === 7
-        && action.staging.c === 4
+        && !action.deathStaging
+        && !action.staging
+        && action.rest.r === 5
+        && action.rest.c === 4
+        && action.path.some((square) => square.r === 7 && square.c === 4)
     ));
     state = applyAction(state, enPassant);
 
     expect(state.board[7][4]?.id).toBe('death');
     expect(state.board.flat().some((piece) => piece?.id === 'white-pawn')).toBe(false);
-    expect(state.board.flat().some((piece) => piece?.id === 'black-pawn')).toBe(false);
+    expect(state.board[5][4]?.id).toBe('black-pawn');
+    expect(state.board[5][4].hasShield).toBe(false);
+});
+
+test('variant en passant stays available after a Life/Death reply first', () => {
+    let state = createEmptyState(COLORS.WHITE);
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 4, { id: 'white-pawn' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 4, 3, { id: 'black-pawn' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.LIFE, COLORS.BLACK, 2, 1, { id: 'black-life' }));
+
+    const advance = actionMatching(state, (action) => action.mode === 'pawnAdvance' && action.to.r === 4);
+    state = applyAction(state, advance);
+
+    expect(generateLegalActions(state).some((action) => action.mode === 'enPassant')).toBe(true);
+
+    const lifeMove = actionMatching(state, (action) => (
+        action.pieceId === 'black-life'
+        && action.mode === 'lifeDeathMove'
+        && action.to.r === 3
+        && action.to.c === 2
+    ));
+    state = applyAction(state, lifeMove);
+
+    expect(state.enPassant?.pieceId).toBe('white-pawn');
+    expect(generateLegalActions(state).some((action) => action.mode === 'enPassant')).toBe(true);
+
+    const standardReply = actionMatching(state, (action) => (
+        action.pieceId === 'black-pawn'
+        && action.mode === 'pawnAdvance'
+        && action.to.r === 5
+        && action.to.c === 3
+    ));
+    state = applyAction(state, standardReply);
+
+    expect(state.enPassant).toBe(null);
 });
 
 test('white a2 pawn always has all three opening advances when lanes are clear', () => {
@@ -188,9 +224,11 @@ test('Death pass-through destroys an attacker after the attack resolves', () => 
         action.pieceId === 'rook'
         && action.kind === 'attack'
         && action.targetId === 'king'
-        && action.staging.r === 5
-        && action.staging.c === 4
+        && !action.staging
+        && action.rest.r === 5
+        && action.rest.c === 5
     ));
+    expect(attack.path.some((square) => square.r === 5 && square.c === 2)).toBe(true);
     state = applyAction(state, attack);
 
     expect(state.board[5][0]).toBe(null);
@@ -224,13 +262,18 @@ test('Death can be used as a fatal attack staging square', () => {
     expect(attack.rest).toBe(undefined);
 });
 
-test('ranged attacks use staging and resting choices for killing blows', () => {
+test('ranged killing blows force the attacker to rest on the destroyed square', () => {
     let state = createEmptyState(COLORS.WHITE);
     placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 9, 1, { id: 'rook' }));
     placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 1, {
         id: 'target',
         hasShield: false,
     }));
+
+    const attacks = generateLegalActions(state).filter((action) => action.kind === 'attack' && action.targetId === 'target');
+    expect(attacks).toHaveLength(1);
+    expect(attacks[0].staging).toBe(undefined);
+    expect(attacks[0].path.some((square) => square.r === 4 && square.c === 1)).toBe(true);
 
     const attack = actionMatching(state, (action) => (
         action.kind === 'attack'
@@ -267,6 +310,16 @@ test('knights can ramp jump over adjacent non-Life/Death pieces', () => {
     ))).toBe(true);
 });
 
+test('knights cannot use L-shaped moves to move to empty squares', () => {
+    const state = createEmptyState(COLORS.WHITE);
+    placePiece(state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
+
+    expect(generateLegalActions(state).some((action) => (
+        action.pieceId === 'knight'
+        && action.kind === 'move'
+    ))).toBe(false);
+});
+
 test('knight ramp actions preserve distinct double-jump routes to the same destination', () => {
     const state = createEmptyState(COLORS.WHITE);
     placePiece(state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
@@ -300,7 +353,7 @@ test('knight ramp jumps cannot use Life or Death pieces as ramps', () => {
     expect(rampActions.some((action) => action.to.r === 7 && action.to.c === 5)).toBe(false);
 });
 
-test('knight attacks expose staging and resting choices correctly', () => {
+test('knight attacks expose staging choices and forced target-square rests', () => {
     const shielded = createEmptyState(COLORS.WHITE);
     placePiece(shielded.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 8, 2, { id: 'knight' }));
     placePiece(shielded.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 6, 3, { id: 'target' }));
@@ -317,10 +370,10 @@ test('knight attacks expose staging and resting choices correctly', () => {
     }));
 
     const killingAttacks = generateLegalActions(unshielded).filter((action) => action.kind === 'attack' && action.targetId === 'target');
-    expect(killingAttacks).toHaveLength(4);
-    expect(killingAttacks.some((action) => action.rest.r === 6 && action.rest.c === 3)).toBe(true);
-    expect(killingAttacks.some((action) => action.rest.r === 6 && action.rest.c === 2)).toBe(true);
-    expect(killingAttacks.some((action) => action.rest.r === 7 && action.rest.c === 3)).toBe(true);
+    expect(killingAttacks).toHaveLength(1);
+    expect(killingAttacks[0].staging).toBe(undefined);
+    expect(killingAttacks[0].path.map((square) => `${square.r},${square.c}`)).toEqual(['7,2', '7,3']);
+    expect(killingAttacks[0].rest).toEqual({ r: 6, c: 3 });
 });
 
 test('knights can choose Death-occupied attack staging squares', () => {
@@ -332,6 +385,52 @@ test('knights can choose Death-occupied attack staging squares', () => {
     const attacks = generateLegalActions(state).filter((action) => action.kind === 'attack' && action.targetId === 'target');
     expect(attacks.map((action) => `${action.staging.r},${action.staging.c}`).sort()).toEqual(['6,2', '7,3']);
     expect(attacks.some((action) => action.deathStaging)).toBe(true);
+});
+
+test('shieldless Knight killing blows still apply Death pass-through before resting', () => {
+    let state = createEmptyState(COLORS.WHITE);
+    placePiece(state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 2, { id: 'knight' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 2, { id: 'death' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 3, {
+        id: 'target',
+        hasShield: false,
+    }));
+
+    const shieldedKnightAttack = actionMatching(state, (action) => (
+        action.pieceId === 'knight'
+        && action.kind === 'attack'
+        && action.targetId === 'target'
+        && !action.staging
+    ));
+    expect(shieldedKnightAttack.path.map((square) => `${square.r},${square.c}`)).toEqual(['4,2', '4,3']);
+    state = applyAction(state, shieldedKnightAttack);
+
+    expect(state.board[4][2]?.id).toBe('death');
+    expect(state.board[3][3]?.id).toBe('knight');
+    expect(state.board[3][3].hasShield).toBe(false);
+
+    state = createEmptyState(COLORS.WHITE);
+    placePiece(state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 2, {
+        id: 'knight',
+        hasShield: false,
+    }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 2, { id: 'death' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 3, {
+        id: 'target',
+        hasShield: false,
+    }));
+
+    const fatalKnightAttack = actionMatching(state, (action) => (
+        action.pieceId === 'knight'
+        && action.kind === 'attack'
+        && action.targetId === 'target'
+        && !action.staging
+    ));
+    state = applyAction(state, fatalKnightAttack);
+
+    expect(state.board[4][2]?.id).toBe('death');
+    expect(state.board.flat().some((piece) => piece?.id === 'target')).toBe(false);
+    expect(state.board.flat().some((piece) => piece?.id === 'knight')).toBe(false);
 });
 
 test('Life heal grants shield and one-turn immunity only to shieldless eligible pieces', () => {
@@ -643,6 +742,35 @@ test('AI takes a loose Queen instead of only threatening it', () => {
     expect(action.targetId).toBe('queen');
 });
 
+test('AI captures a shieldless checking Queen with a pawn instead of only moving the King', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 5, { id: 'black-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 5, { id: 'white-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.QUEEN, COLORS.WHITE, 2, 5, { id: 'checking-queen' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 1, 6, { id: 'black-pawn' }));
+    updateIntimidation(state);
+
+    expect(state.board[2][5].isIntimidated).toBe(true);
+    expect(state.board[2][5].hasShield).toBe(false);
+    expect(generateLegalActions(state).some((action) => (
+        action.pieceId === 'black-pawn'
+        && action.kind === 'attack'
+        && action.targetId === 'checking-queen'
+        && action.rest.r === 2
+        && action.rest.c === 5
+    ))).toBe(true);
+
+    const action = chooseAiAction(state, COLORS.BLACK, {
+        maxDepth: 1,
+        maxActions: 10,
+        tacticalWeight: 1,
+    });
+
+    expect(action.pieceId).toBe('black-pawn');
+    expect(action.kind).toBe('attack');
+    expect(action.targetId).toBe('checking-queen');
+});
+
 test('AI rescues an endangered Bishop when no stronger tactic is available', () => {
     const state = createEmptyState(COLORS.BLACK);
     placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 5, { id: 'black-king' }));
@@ -680,6 +808,47 @@ test('AI avoids handing Life or Death pieces across the ownership line in quiet 
     expect(action.pieceId).toBe('death');
     expect(action.mode).toBe('lifeDeathMove');
     expect(action.to.r).toBeLessThan(5);
+});
+
+test('AI activates an opened Life or Death piece instead of skipping the slot', () => {
+    let state = createGameState();
+    const whiteAdvance = actionMatching(state, (action) => (
+        action.pieceId === 'white-pawn-4'
+        && action.mode === 'pawnAdvance'
+        && action.to.r === 5
+    ));
+    state = applyAction(state, whiteAdvance);
+    state = skipSpecialMove(state, COLORS.WHITE);
+
+    const gateAdvance = actionMatching(state, (action) => (
+        action.pieceId === 'black-pawn-1'
+        && action.mode === 'pawnAdvance'
+        && action.to.r === 4
+        && action.to.c === 1
+    ));
+    state = applyAction(state, gateAdvance);
+
+    for (const options of [
+        { maxDepth: 1, maxActions: 14 },
+        { maxDepth: 2, maxActions: 20, quiescenceDepth: 1 },
+        { maxDepth: 3, maxActions: 24, maxTacticalActions: 8, quiescenceDepth: 1 },
+    ]) {
+        const action = chooseAiAction(state, COLORS.BLACK, options);
+        expect(action.kind).toBe('move');
+        expect(action.mode).toBe('lifeDeathMove');
+        expect(action.pieceId).toBe('black-death-a');
+        expect(action.to).toEqual({ r: 1, c: 1 });
+    }
+});
+
+test('AI develops Life and Death pieces forward when no tactic says otherwise', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    state.turn.standardMoveMade = true;
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 2, 2, { id: 'death' }));
+
+    const action = chooseAiAction(state, COLORS.BLACK, { maxDepth: 1, maxActions: 20 });
+    expect(action.mode).toBe('lifeDeathMove');
+    expect(action.to.r).toBeGreaterThan(2);
 });
 
 test('AI will cross the Life or Death ownership line for a king destruction tactic', () => {
@@ -762,6 +931,31 @@ test('AI Life healing prefers owned shieldless pieces over enemy pieces', () => 
     expect(action.targetId).toBe('black-pawn');
 });
 
+test('AI moves Death to build a high-value kill threat', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    state.turn.standardMoveMade = true;
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 2, 2, { id: 'death' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.QUEEN, COLORS.WHITE, 4, 4, { id: 'queen' }));
+
+    const action = chooseAiAction(state, COLORS.BLACK, { maxDepth: 1, maxActions: 20 });
+    expect(action.mode).toBe('lifeDeathMove');
+    expect(action.to).toEqual({ r: 3, c: 3 });
+});
+
+test('AI moves Life toward useful shield repairs', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    state.turn.standardMoveMade = true;
+    placePiece(state.board, createPiece(PIECE_TYPES.LIFE, COLORS.BLACK, 2, 3, { id: 'life' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 4, 5, {
+        id: 'rook',
+        hasShield: false,
+    }));
+
+    const action = chooseAiAction(state, COLORS.BLACK, { maxDepth: 1, maxActions: 20 });
+    expect(action.mode).toBe('lifeDeathMove');
+    expect(action.to).toEqual({ r: 3, c: 4 });
+});
+
 test('AI preserves quiet retreats for endangered valuable pieces under tight pruning', () => {
     const state = createEmptyState(COLORS.BLACK);
     placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 5, { id: 'black-king' }));
@@ -833,6 +1027,28 @@ test('AI avoids fatal Death pass-through attacks for only a shield break', () =>
     expect(action.pieceId === 'rook' && action.kind === 'attack' && action.targetId === 'pawn').toBe(false);
 });
 
+test('AI treats Death landings as fatal even for immune pieces', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 0, { id: 'black-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 9, { id: 'white-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 0, 4, {
+        id: 'rook',
+        hasShield: false,
+        isImmune: true,
+        immunityGrantedBy: COLORS.WHITE,
+    }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 9, 4, { id: 'death' }));
+
+    expect(generateLegalActions(state).some((candidate) => (
+        candidate.pieceId === 'rook'
+        && candidate.kind === 'move'
+        && candidate.deathLanding
+    ))).toBe(true);
+
+    const action = chooseAiAction(state, COLORS.BLACK, { maxDepth: 1, maxActions: 1 });
+    expect(action.deathLanding).not.toBe(true);
+});
+
 test('AI values Life pass-through shield gains for shieldless pieces', () => {
     const state = createEmptyState(COLORS.BLACK);
     placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 4, 0, {
@@ -877,7 +1093,7 @@ test('AI strength levels return legal actions without mutating the search state'
     ));
     state = applyAction(state, whiteAdvance);
     if (canSkipSpecialMove(state, COLORS.WHITE)) {
-        state = skipHumanSpecialMove(state, COLORS.WHITE);
+        state = skipSpecialMove(state, COLORS.WHITE);
     }
     const before = JSON.stringify(state);
 
@@ -901,7 +1117,7 @@ test('state records the full session action history for the UI move log', () => 
         expect(action).toBeTruthy();
         state = applyAction(state, action);
         if (canSkipSpecialMove(state, state.currentPlayer)) {
-            state = skipHumanSpecialMove(state, state.currentPlayer);
+            state = skipSpecialMove(state, state.currentPlayer);
         }
         if (state.gameOver) break;
     }
@@ -911,7 +1127,7 @@ test('state records the full session action history for the UI move log', () => 
     expect(state.actionHistory.at(-1).color).toBeTruthy();
 });
 
-test('human can skip a remaining special move after using a standard move', () => {
+test('players can skip a remaining special move after using a standard move', () => {
     let state = createEmptyState(COLORS.WHITE);
     placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 9, 1, { id: 'rook' }));
     placePiece(state.board, createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 5, 4, { id: 'life' }));
@@ -921,12 +1137,12 @@ test('human can skip a remaining special move after using a standard move', () =
     state = applyAction(state, rookMove);
 
     expect(canSkipSpecialMove(state, COLORS.WHITE)).toBe(true);
-    state = skipHumanSpecialMove(state, COLORS.WHITE);
+    state = skipSpecialMove(state, COLORS.WHITE);
     expect(state.currentPlayer).toBe(COLORS.BLACK);
     expect(state.lastAction.mode).toBe('skipSpecial');
 });
 
-test('skip special is not generated as an AI legal action', () => {
+test('skip special is generated as a legal action after the standard slot is used', () => {
     let state = createEmptyState(COLORS.BLACK);
     placePiece(state.board, createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 0, 1, { id: 'rook' }));
     placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 4, { id: 'death' }));
@@ -934,8 +1150,28 @@ test('skip special is not generated as an AI legal action', () => {
     const rookMove = actionMatching(state, (action) => action.pieceId === 'rook' && action.kind === 'move');
     state = applyAction(state, rookMove);
 
-    expect(generateLegalActions(state).some((action) => action.kind === 'skip')).toBe(false);
+    expect(generateLegalActions(state).some((action) => action.kind === 'skip')).toBe(true);
     expect(canSkipSpecialMove(state, COLORS.BLACK)).toBe(true);
+});
+
+test('AI can skip a remaining special move instead of making a bad Life/Death move', () => {
+    const state = createEmptyState(COLORS.BLACK);
+    state.turn.standardMoveMade = true;
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 5, { id: 'black-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 5, { id: 'white-king' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 4, { id: 'death' }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 3, { id: 'blocker-a', isImmune: true }));
+    placePiece(state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 5, { id: 'blocker-b', isImmune: true }));
+
+    expect(canSkipSpecialMove(state, COLORS.BLACK)).toBe(true);
+
+    const action = chooseAiAction(state, COLORS.BLACK, {
+        maxDepth: 1,
+        maxActions: 8,
+        tacticalWeight: 1,
+    });
+
+    expect(action.kind).toBe('skip');
 });
 
 test('no-move positions resolve to a draw instead of looping forever', () => {

@@ -8,7 +8,7 @@ import {
     generateLegalActions,
     getActionsForPiece,
     ownerOf,
-    skipHumanSpecialMove,
+    skipSpecialMove,
     squareKey,
 } from '../engine/index.js';
 import { Renderer, emptyHighlights } from './renderer.js';
@@ -272,7 +272,7 @@ export class GameController {
                     ...emptyHighlights(),
                     resting: new Set(restKeys),
                 },
-                phaseInfo: 'Choose where the attacker rests.',
+                phaseInfo: 'Confirm the attacker rest square.',
             };
             this.render();
             return;
@@ -315,7 +315,7 @@ export class GameController {
     skipSpecialMove() {
         if (!this.canHumanAct() || !canSkipSpecialMove(this.state, this.state.currentPlayer)) return;
         const previous = this.animator.snapshot();
-        this.state = skipHumanSpecialMove(this.state, this.state.currentPlayer);
+        this.state = skipSpecialMove(this.state, this.state.currentPlayer);
         this.clearSelection();
         this.render();
         this.animator.animate(previous, this.state.lastAction, this.settings.animationsEnabled);

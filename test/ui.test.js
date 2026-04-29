@@ -609,12 +609,56 @@ test('controller prefers a one-hop Knight ramp over a longer route to the same s
     expect(controller.state.board[5][7]?.id).toBe('knight');
     expect(controller.state.lastAction.rampSequence).toHaveLength(1);
     expect(controller.state.lastAction.rampSequence[0].land).toEqual({ r: 5, c: 7 });
+    controller.settings.animationsEnabled = true;
+    expect(controller.animationDelay(controller.state.lastAction)).toBe(ANIMATION_TIMING.moveDurationMs + 60);
 
     globalThis.document = previousDocument;
     globalThis.localStorage = previousLocalStorage;
 });
 
-test('board animator plays double Knight ramp as two chained 550ms travel animations without an intermediate pause', async () => {
+test('controller commits shieldless Knight attacks without asking for staging', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const controller = new GameController({
+        boardEl: new FakeElement('div'),
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 8, 2, { id: 'knight' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 6, 3, {
+        id: 'target',
+        hasShield: false,
+    }));
+    controller.selectPiece(knight);
+
+    controller.handleBoardClick({
+        target: {
+            closest: () => ({ dataset: { row: '6', col: '3' } }),
+        },
+    });
+
+    expect(controller.view.phase).toBe('select');
+    expect(controller.state.board[6][3]?.id).toBe('knight');
+    expect(controller.state.lastAction.staging).toBe(undefined);
+    expect(controller.state.lastAction.rest).toEqual({ r: 6, c: 3 });
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('board animator plays double Knight ramp as two chained hop animations without an intermediate pause', async () => {
     const animations = [];
     const squareEl = new FakeElement('button');
     const pieceEl = {

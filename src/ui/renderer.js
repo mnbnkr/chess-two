@@ -68,27 +68,29 @@ export class Renderer {
     }
 
     renderStatus(state, view) {
+        const statusState = view.statusState ?? state;
         const playerTurnEl = this.statusPanelEl.querySelector('#player-turn');
         const previousPlayer = this.renderedPlayer;
+        const displayedPlayer = view.displayPlayer ?? statusState.currentPlayer;
         const playerSide = view.boardSide ?? COLORS.WHITE;
-        const keepFlash = previousPlayer === state.currentPlayer && playerTurnEl.className.includes('turn-start-flash');
+        const keepFlash = previousPlayer === displayedPlayer && playerTurnEl.className.includes('turn-start-flash');
         const shouldFlashTurn = previousPlayer
-            && previousPlayer !== state.currentPlayer
-            && state.currentPlayer === playerSide
-            && !state.gameOver;
-        playerTurnEl.textContent = playerName(state.currentPlayer);
-        playerTurnEl.className = `player-turn ${state.currentPlayer}${keepFlash ? ' turn-start-flash' : ''}`;
+            && previousPlayer !== displayedPlayer
+            && displayedPlayer === playerSide
+            && !statusState.gameOver;
+        playerTurnEl.textContent = playerName(displayedPlayer);
+        playerTurnEl.className = `player-turn ${displayedPlayer}${keepFlash ? ' turn-start-flash' : ''}`;
         if (shouldFlashTurn) {
             restartClassAnimation(playerTurnEl, 'turn-start-flash');
         }
-        this.renderedPlayer = state.currentPlayer;
+        this.renderedPlayer = displayedPlayer;
         this.renderActionHistory(state);
 
-        const legalActions = state.gameOver ? [] : generateLegalActions(state);
-        const standardStatus = state.turn.standardMoveMade
+        const legalActions = statusState.gameOver ? [] : generateLegalActions(statusState);
+        const standardStatus = statusState.turn.standardMoveMade
             ? 'Used'
             : (legalActions.some((action) => action.consumes?.standard) ? 'Available' : 'Unavailable');
-        const specialStatus = state.turn.specialMoveMade
+        const specialStatus = statusState.turn.specialMoveMade
             ? 'Used'
             : (legalActions.some((action) => action.consumes?.special) ? 'Available' : 'Unavailable');
         setStatus(this.statusPanelEl.querySelector('#standard-move-status'), standardStatus);
@@ -99,14 +101,16 @@ export class Renderer {
             info.textContent = state.gameOver.winner
                 ? `${playerName(state.gameOver.winner)} wins: ${state.gameOver.reason}.`
                 : `Draw: ${state.gameOver.reason}.`;
+        } else if (view.isAiAnimating) {
+            info.textContent = 'Black AI is finishing its move...';
         } else if (view.isAiThinking) {
             info.textContent = 'Black AI is thinking...';
         } else {
-            info.textContent = view.phaseInfo ?? `${playerName(state.currentPlayer)} to move.`;
+            info.textContent = view.phaseInfo ?? `${playerName(statusState.currentPlayer)} to move.`;
         }
 
         const moveNumber = this.statusPanelEl.querySelector('#move-number');
-        if (moveNumber) moveNumber.textContent = String(state.moveNumber);
+        if (moveNumber) moveNumber.textContent = String(statusState.moveNumber);
     }
 
     renderActionHistory(state) {
@@ -298,7 +302,9 @@ function markerForSquare(row, col, view, highlights) {
         classes.push(view.phase === 'resting' && !isResting ? 'selected-muted' : 'selected');
     }
     if (highlights.moves.has(key)) classes.push('valid-move');
+    if (highlights.deathMoves?.has(key)) classes.push('valid-death-move');
     if (highlights.rampMoves?.has(key)) classes.push('valid-ramp');
+    if (highlights.deathRampMoves?.has(key)) classes.push('valid-death-ramp');
     if (highlights.attacks.has(key)) classes.push('valid-attack');
     if (highlights.specials.has(key)) classes.push('valid-special');
     if (highlights.staging.has(key)) classes.push('valid-staging');
@@ -312,7 +318,9 @@ function markerForSquare(row, col, view, highlights) {
 export function emptyHighlights() {
     return {
         moves: new Set(),
+        deathMoves: new Set(),
         rampMoves: new Set(),
+        deathRampMoves: new Set(),
         attacks: new Set(),
         specials: new Set(),
         staging: new Set(),

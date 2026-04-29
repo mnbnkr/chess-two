@@ -16,6 +16,12 @@ const {
 } = ANIMATION_TIMING;
 
 const MOVE_EASING = "cubic-bezier(.18,.82,.22,1)";
+const MOVE_EASING_X1 = 0.18;
+const MOVE_EASING_Y1 = 0.82;
+const MOVE_EASING_X2 = 0.22;
+const MOVE_EASING_Y2 = 1;
+const NORMAL_MOVE_FINAL_OFFSET = 0.82;
+const MIN_PATH_EVENT_DELAY = 42;
 
 export function moveAnimationDurationForAction(action = null) {
   const hopCount =
@@ -40,12 +46,18 @@ export class BoardAnimator {
   snapshot() {
     const pieces = new Map();
     const squares = new Map();
+    const squarePieces = new Map();
     for (const squareEl of this.boardEl.querySelectorAll?.(".square") ?? []) {
       if (typeof squareEl.getBoundingClientRect !== "function") continue;
-      squares.set(
-        squareKey(squareEl.dataset),
-        squareEl.getBoundingClientRect(),
-      );
+      const key = squareKey(squareEl.dataset);
+      squares.set(key, squareEl.getBoundingClientRect());
+      const pieceEl = squareEl.querySelector?.("[data-piece-id]");
+      if (pieceEl) {
+        squarePieces.set(key, {
+          className: pieceEl.className,
+          textContent: pieceEl.textContent,
+        });
+      }
     }
     for (const pieceEl of this.boardEl.querySelectorAll?.("[data-piece-id]") ??
       []) {
@@ -60,7 +72,7 @@ export class BoardAnimator {
           : null,
       });
     }
-    return { pieces, squares };
+    return { pieces, squares, squarePieces };
   }
 
   animate(previous, action, enabled) {
@@ -88,11 +100,17 @@ export class BoardAnimator {
       const dy = old.rect.top - newRect.top;
       if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
 
+      const shieldCleanup =
+        action?.pieceId === pieceEl.dataset.pieceId
+          ? this.preparePathShieldAnimation(pieceEl, old, action, previous)
+          : null;
+
       if (
         action?.mode === "knightRamp" &&
         action.pieceId === pieceEl.dataset.pieceId
       ) {
-        if (this.animateKnightRamp(pieceEl, old, action, previous)) continue;
+        if (this.animateKnightRamp(pieceEl, old, action, previous, shieldCleanup))
+          continue;
       }
 
       const squareEl = pieceEl.closest?.(".square");
@@ -117,6 +135,7 @@ export class BoardAnimator {
         },
       );
       const cleanup = () => {
+        shieldCleanup?.();
         pieceEl.classList.remove("is-moving");
         squareEl?.classList.remove("is-animating");
       };
@@ -124,7 +143,26 @@ export class BoardAnimator {
     }
   }
 
-  animateKnightRamp(pieceEl, old, action, previous) {
+  preparePathShieldAnimation(pieceEl, old, action, previous) {
+    const finalShielded = hasClass(pieceEl.className, "has-shield");
+    const plan = pathShieldTransitionPlan(action, old, previous, finalShielded);
+    if (!plan) return null;
+
+    setShieldClass(pieceEl, plan.initialShielded);
+    const timers = plan.events.map((event) =>
+      globalThis.setTimeout?.(() => {
+        setShieldClass(pieceEl, event.shielded);
+        this.pulseSquare(event.square, event.effectClass);
+      }, event.time),
+    );
+
+    return () => {
+      for (const timer of timers) globalThis.clearTimeout?.(timer);
+      setShieldClass(pieceEl, finalShielded);
+    };
+  }
+
+  animateKnightRamp(pieceEl, old, action, previous, shieldCleanup = null) {
     if (
       !Array.isArray(action.rampSequence) ||
       action.rampSequence.length === 0
@@ -149,7 +187,13 @@ export class BoardAnimator {
     const points = [old.rect, ...routeRects];
 
     if (hopCount > 1) {
-      this.animateKnightRampSequence(pieceEl, squareEl, points, finalRect);
+      this.animateKnightRampSequence(
+        pieceEl,
+        squareEl,
+        points,
+        finalRect,
+        shieldCleanup,
+      );
       return true;
     }
 
@@ -164,6 +208,7 @@ export class BoardAnimator {
       },
     );
     const cleanup = () => {
+      shieldCleanup?.();
       pieceEl.classList.remove("is-moving");
       squareEl?.classList.remove("is-animating");
     };
@@ -171,12 +216,19 @@ export class BoardAnimator {
     return true;
   }
 
-  animateKnightRampSequence(pieceEl, squareEl, points, finalRect) {
+  animateKnightRampSequence(
+    pieceEl,
+    squareEl,
+    points,
+    finalRect,
+    shieldCleanup = null,
+  ) {
     squareEl?.classList.add("is-animating");
     pieceEl.classList.add("is-moving");
     const animations = [];
     const cleanup = () => {
       for (const animation of animations) animation.cancel?.();
+      shieldCleanup?.();
       pieceEl.classList.remove("is-moving");
       squareEl?.classList.remove("is-animating");
     };
@@ -354,6 +406,7 @@ function normalizeSnapshot(previous) {
           )
         : new Map(),
     squares: new Map(),
+    squarePieces: new Map(),
   };
 }
 
@@ -399,4 +452,95 @@ function doubleRampHopKeyframes(from, to, finalRect, isFinalHop) {
 
 function transformForRect(rect, finalRect, scale) {
   return `translate(${rect.left - finalRect.left}px, ${rect.top - finalRect.top}px) scale(${scale})`;
+}
+
+function pathShieldTransitionPlan(action, old, previous, finalShielded) {
+  if (!action?.path?.length || hasClass(old.className, "is-immune")) {
+    return null;
+  }
+
+  let shielded = hasClass(old.className, "has-shield");
+  const initialShielded = shielded;
+  const events = [];
+  for (let index = 0; index < action.path.length; index++) {
+    const square = action.path[index];
+    const occupant = previous.squarePieces?.get(squareKey(square));
+    if (!occupant) continue;
+
+    if (hasClass(occupant.className, "life-piece")) {
+      if (shielded || hasClass(old.className, "is-intimidated")) continue;
+      shielded = true;
+      events.push({
+        square,
+        shielded,
+        effectClass: "life-glow",
+        time: pathEventTime(action, square, index),
+      });
+    }
+
+    if (hasClass(occupant.className, "death-piece")) {
+      if (!shielded) continue;
+      shielded = false;
+      events.push({
+        square,
+        shielded,
+        effectClass: "death-move-glow",
+        time: pathEventTime(action, square, index),
+      });
+    }
+  }
+
+  if (events.length === 0 && initialShielded === finalShielded) return null;
+  return { initialShielded, events };
+}
+
+function pathEventTime(action, square, pathIndex) {
+  if (action?.mode === "knightRamp" && Array.isArray(action.rampSequence)) {
+    const hopIndex = action.rampSequence.findIndex(
+      (step) => squareKey(step.ramp) === squareKey(square),
+    );
+    if (hopIndex >= 0) {
+      const hopDuration =
+        action.rampSequence.length > 1 ? DOUBLE_RAMP_HOP_DURATION : MOVE_DURATION;
+      return Math.round(
+        hopIndex * hopDuration + easedTimeForProgress(0.5, hopDuration),
+      );
+    }
+  }
+
+  const pathLength = Math.max(1, action.path?.length ?? 1);
+  const distanceProgress = (pathIndex + 1) / (pathLength + 1);
+  return Math.round(
+    easedTimeForProgress(distanceProgress * NORMAL_MOVE_FINAL_OFFSET, MOVE_DURATION),
+  );
+}
+
+function easedTimeForProgress(progress, duration) {
+  const clamped = Math.max(0, Math.min(1, progress));
+  let low = 0;
+  let high = 1;
+  for (let i = 0; i < 18; i++) {
+    const middle = (low + high) / 2;
+    if (cubicBezier(middle, MOVE_EASING_Y1, MOVE_EASING_Y2) < clamped) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  const parameter = (low + high) / 2;
+  const timeProgress = cubicBezier(parameter, MOVE_EASING_X1, MOVE_EASING_X2);
+  return Math.max(MIN_PATH_EVENT_DELAY, timeProgress * duration);
+}
+
+function cubicBezier(t, p1, p2) {
+  const inv = 1 - t;
+  return 3 * inv * inv * t * p1 + 3 * inv * t * t * p2 + t * t * t;
+}
+
+function setShieldClass(pieceEl, shielded) {
+  pieceEl.classList?.toggle?.("has-shield", shielded);
+}
+
+function hasClass(className, needle) {
+  return (` ${className ?? ""} `).includes(` ${needle} `);
 }

@@ -38,7 +38,8 @@ export function clonePiece(piece) {
     return piece ? { ...piece } : null;
 }
 
-export function cloneState(state) {
+export function cloneState(state, options = {}) {
+    const preserveHistory = options.preserveHistory ?? true;
     const board = createBoard();
     for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
@@ -57,8 +58,8 @@ export function cloneState(state) {
             crossed: state.enPassant.crossed.map((sq) => ({ ...sq })),
         } : null,
         gameOver: state.gameOver ? { ...state.gameOver } : null,
-        lastAction: state.lastAction ? structuredClone(state.lastAction) : null,
-        actionHistory: state.actionHistory ? structuredClone(state.actionHistory) : [],
+        lastAction: preserveHistory && state.lastAction ? structuredClone(state.lastAction) : null,
+        actionHistory: preserveHistory && state.actionHistory ? structuredClone(state.actionHistory) : [],
     };
 }
 

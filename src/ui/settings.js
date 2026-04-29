@@ -10,9 +10,9 @@ const AI_LEVELS = {
     0: { label: 'Off (self-play)', maxDepth: 0, maxActions: 0, thinkDelay: 0 },
     1: { label: 'Level 1', maxDepth: 1, maxActions: 14, maxTacticalActions: 4, quiescenceDepth: 0, tacticalWeight: 0.45, thinkDelay: 45, timeLimitMs: 100, hardTimeLimitMs: 160 },
     2: { label: 'Level 2', maxDepth: 2, maxActions: 20, maxTacticalActions: 6, quiescenceDepth: 1, tacticalWeight: 0.75, thinkDelay: 35, timeLimitMs: 280, hardTimeLimitMs: 460 },
-    3: { label: 'Level 3', maxDepth: 3, maxActions: 24, maxTacticalActions: 8, quiescenceDepth: 1, tacticalWeight: 1, thinkDelay: 30, timeLimitMs: 950, hardTimeLimitMs: 1650 },
-    4: { label: 'Level 4', maxDepth: 4, maxActions: 20, maxTacticalActions: 7, quiescenceDepth: 1, tacticalWeight: 1.25, thinkDelay: 25, timeLimitMs: 1200, hardTimeLimitMs: 2000 },
-    5: { label: 'Level 5', maxDepth: 5, maxActions: 30, maxTacticalActions: 12, quiescenceDepth: 2, tacticalWeight: 1.9, thinkDelay: 15, timeLimitMs: 2600, hardTimeLimitMs: 4200 },
+    3: { label: 'Level 3', maxDepth: 3, maxActions: 26, maxTacticalActions: 8, quiescenceDepth: 1, tacticalWeight: 1.05, thinkDelay: 30, timeLimitMs: 950, hardTimeLimitMs: 1650 },
+    4: { label: 'Level 4', maxDepth: 4, maxActions: 32, maxTacticalActions: 10, quiescenceDepth: 2, tacticalWeight: 1.35, thinkDelay: 25, timeLimitMs: 1200, hardTimeLimitMs: 2000 },
+    5: { label: 'Level 5', maxDepth: 7, maxActions: 42, maxTacticalActions: 18, quiescenceDepth: 3, tacticalWeight: 2.35, thinkDelay: 15, timeLimitMs: 2600, hardTimeLimitMs: 4200 },
 };
 
 export function loadSettings(storage = globalThis.localStorage) {

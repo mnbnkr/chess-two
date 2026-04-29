@@ -14,6 +14,11 @@ const DEFAULT_OPTIONS = {
     depthStartMargin: 1.75,
 };
 
+const LIFE_DEATH_STRATEGIC_VALUES = {
+    [PIECE_TYPES.LIFE]: 460,
+    [PIECE_TYPES.DEATH]: 760,
+};
+
 export function chooseAiAction(state, color = 'black', options = {}) {
     const settings = { ...DEFAULT_OPTIONS, ...options };
     settings.transposition = new Map();
@@ -52,7 +57,7 @@ function searchRoot(state, color, settings, actions, depth) {
             settings.timedOut = true;
             return { action: bestAction, score: bestScore, completed: false };
         }
-        const next = applyAction(state, action);
+        const next = applySearchAction(state, action);
         const score = (depth <= 1 ? evaluateState(next, color) : minimax(next, depth - 1, alpha, beta, color, settings))
             + actionHeuristic(state, action, color) * rootHeuristicWeight(depth)
             + rootTacticalScore(state, next, action, color, settings);
@@ -85,7 +90,7 @@ function minimax(state, depth, alpha, beta, aiColor, settings) {
     if (maximizing) {
         let value = Number.NEGATIVE_INFINITY;
         for (const action of actions) {
-            value = Math.max(value, minimax(applyAction(state, action), depth - 1, alpha, beta, aiColor, settings));
+            value = Math.max(value, minimax(applySearchAction(state, action), depth - 1, alpha, beta, aiColor, settings));
             alpha = Math.max(alpha, value);
             if (alpha >= beta) break;
         }
@@ -95,7 +100,7 @@ function minimax(state, depth, alpha, beta, aiColor, settings) {
 
     let value = Number.POSITIVE_INFINITY;
     for (const action of actions) {
-        value = Math.min(value, minimax(applyAction(state, action), depth - 1, alpha, beta, aiColor, settings));
+        value = Math.min(value, minimax(applySearchAction(state, action), depth - 1, alpha, beta, aiColor, settings));
         beta = Math.min(beta, value);
         if (alpha >= beta) break;
     }
@@ -123,7 +128,7 @@ function quiescence(state, depth, alpha, beta, aiColor, settings) {
         let value = standPat;
         alpha = Math.max(alpha, value);
         for (const action of actions) {
-            value = Math.max(value, quiescence(applyAction(state, action), depth - 1, alpha, beta, aiColor, settings));
+            value = Math.max(value, quiescence(applySearchAction(state, action), depth - 1, alpha, beta, aiColor, settings));
             alpha = Math.max(alpha, value);
             if (isTimeUp(settings)) settings.timedOut = true;
             if (alpha >= beta || settings.timedOut) break;
@@ -134,12 +139,16 @@ function quiescence(state, depth, alpha, beta, aiColor, settings) {
     let value = standPat;
     beta = Math.min(beta, value);
     for (const action of actions) {
-        value = Math.min(value, quiescence(applyAction(state, action), depth - 1, alpha, beta, aiColor, settings));
+        value = Math.min(value, quiescence(applySearchAction(state, action), depth - 1, alpha, beta, aiColor, settings));
         beta = Math.min(beta, value);
         if (isTimeUp(settings)) settings.timedOut = true;
         if (alpha >= beta || settings.timedOut) break;
     }
     return value;
+}
+
+function applySearchAction(state, action) {
+    return applyAction(state, action, { recordHistory: false });
 }
 
 export function evaluateState(state, color = 'black') {
@@ -149,15 +158,17 @@ export function evaluateState(state, color = 'black') {
     }
 
     let score = 0;
+    const lifeCounts = lifeCountsByOwner(state);
     for (const piece of allPieces(state)) {
         const sign = ownerOf(piece) === color ? 1 : -1;
-        let value = MATERIAL_VALUES[piece.type] ?? 0;
+        let value = materialValue(piece.type);
         if (piece.hasShield) value += shieldValueForType(piece.type);
         if (piece.isImmune) value += 45;
         if (piece.isIntimidated) value -= 85;
         if (piece.type === PIECE_TYPES.PAWN) value += pawnProgress(piece) * 9;
         value += positionalValue(piece, state, color);
         if (piece.type === PIECE_TYPES.LIFE || piece.type === PIECE_TYPES.DEATH) value += lifeDeathPositionValue(piece);
+        value += shieldRepairContextValue(piece, lifeCounts.get(ownerOf(piece)) ?? 0);
         score += sign * value;
     }
 
@@ -226,6 +237,9 @@ function actionHeuristic(state, action, color, settings = DEFAULT_OPTIONS, conte
     const targetSign = targetOwner === color ? -1 : 1;
     if (action.target?.type === PIECE_TYPES.KING) score += targetSign * 80_000;
     if (action.kind === 'attack') score += targetSign * attackActionValue(action);
+    if (action.kind === 'attack' && action.target?.isIntimidated) {
+        score += targetSign * intimidatedTargetActionValue(action);
+    }
     if (action.mode === 'kill') {
         const targetValue = targetActionValue(action);
         score += targetSign * (850 + targetValue * 2.4);
@@ -239,7 +253,7 @@ function actionHeuristic(state, action, color, settings = DEFAULT_OPTIONS, conte
     const actorSign = actorColor && actorColor !== color ? -1 : 1;
     const destination = actionDestination(action);
     if (action.mode === 'castle') score += actorSign * 90;
-    if (action.promotionType) score += actorSign * (MATERIAL_VALUES[action.promotionType] ?? 0);
+    if (action.promotionType) score += actorSign * materialValue(action.promotionType);
     if (destination) score += actorSign * squareQuality(destination.r, destination.c, actorPerspective) * 5;
     if (action.from && destination) {
         score += actorSign * developmentDelta(action, actorPerspective);
@@ -247,6 +261,7 @@ function actionHeuristic(state, action, color, settings = DEFAULT_OPTIONS, conte
         score += actorSign * lifeDeathGateMoveBonus(state, action, actorPerspective);
         score += actorSign * lifeDeathMoveActionValue(state, action, actorPerspective);
         score += lifeDeathTransferScore(state, action, color);
+        score += lifeDeathAnnihilationScore(state, action, color);
         score += actorSign * pathEffectScore(pathReport);
     }
     score += defensiveActionOrderingScore(state, action, color, context);
@@ -280,11 +295,14 @@ function rootTacticalScore(before, after, action, color, settings) {
     let score = 0;
     if (action.kind === 'attack') {
         score += captureTacticalBonus(actor, action);
+        score += intimidatedTargetTacticalBonus(action, color);
         score += shieldBreakTacticalBonus(after, actor, action, color);
         score += shieldTradeDiscipline(actor, action);
     }
     if (action.mode === 'kill') score += deathKillTacticalBonus(action, color);
     if (action.mode === 'heal') score += healTacticalBonus(action, color);
+    score += lifeDeathTransferScore(before, action, color) * 0.85;
+    score += lifeDeathAnnihilationScore(before, action, color) * 0.9;
     score += defensiveRootScore(before, after, actor, action, color);
     score += teamSafetyDeltaScore(before, after, color);
     score -= postActionExposurePenalty(after, action, color);
@@ -293,32 +311,48 @@ function rootTacticalScore(before, after, action, color, settings) {
 
 function captureTacticalBonus(actor, action) {
     if (action.kind !== 'attack' || action.target?.hadShield || action.target?.type === PIECE_TYPES.KING) return 0;
-    const targetValue = MATERIAL_VALUES[action.target?.type] ?? 0;
-    const actorValue = MATERIAL_VALUES[actor?.type] ?? 0;
+    const targetValue = materialValue(action.target?.type);
+    const actorValue = materialValue(actor?.type);
     const favorableTrade = Math.max(0, targetValue - actorValue * 0.55);
-    return 150 + targetValue * 0.42 + favorableTrade * 0.34;
+    return 260 + targetValue * 0.92 + favorableTrade * 0.34;
+}
+
+function intimidatedTargetActionValue(action) {
+    const targetValue = targetActionValue(action);
+    const suppressedShield = action.target?.intimidationSuppressedShield
+        ? shieldValueForType(action.target.type)
+        : 0;
+    return 260 + targetValue * 0.38 + suppressedShield * 0.85;
+}
+
+function intimidatedTargetTacticalBonus(action, color) {
+    if (action.kind !== 'attack' || !action.target?.isIntimidated) return 0;
+    const sign = ownerFromSnapshot(action.target) === color ? -1 : 1;
+    const targetValue = targetActionValue(action);
+    const suppressedShield = action.target?.intimidationSuppressedShield
+        ? shieldValueForType(action.target.type)
+        : 0;
+    return sign * (360 + targetValue * 0.92 + suppressedShield * 1.1);
 }
 
 function shieldTradeDiscipline(actor, action) {
     if (!action.target?.hadShield || action.target?.type === PIECE_TYPES.KING) return 0;
-    const actorStake = (MATERIAL_VALUES[actor.type] ?? 0) + (actor.hasShield ? shieldValueForType(actor.type) : 0);
+    const actorStake = materialValue(actor.type) + (actor.hasShield ? shieldValueForType(actor.type) : 0);
     const shieldGain = shieldPressureValue(action.target);
     return -Math.max(0, actorStake - shieldGain * 3.1) * 0.18;
 }
 
 function shieldBreakTacticalBonus(after, actor, action, color) {
     if (!action.target?.hadShield || action.target?.type === PIECE_TYPES.KING) return 0;
-    const targetBase = MATERIAL_VALUES[action.target.type] ?? 0;
-    const actorBase = MATERIAL_VALUES[actor.type] ?? 0;
+    const targetBase = materialValue(action.target.type);
+    const actorBase = materialValue(actor.type);
     const targetShield = shieldPressureValue(action.target);
     const cheapness = Math.max(0, targetBase - actorBase * 0.6);
     const pawnLever = actor.type === PIECE_TYPES.PAWN ? 80 : 0;
     let bonus = 90 + targetShield * 1.45 + targetBase * 0.16 + cheapness * 0.55 + pawnLever;
 
     const targetAfter = findPieceById(after, action.targetId);
-    if (targetAfter && canBeHealedByOwner(after, targetAfter, oppositeColor(color))) {
-        bonus *= 0.48;
-    }
+    if (targetAfter) bonus *= shieldRepairMultiplier(after, targetAfter, oppositeColor(color));
     return bonus;
 }
 
@@ -422,7 +456,7 @@ function pathEffectReport(state, action) {
         deathLanding: Boolean(action.deathLanding),
         lifeCount: 0,
         deathCount: 0,
-        actorValue: actor ? MATERIAL_VALUES[actor.type] ?? 0 : 0,
+        actorValue: actor ? materialValue(actor.type) : 0,
         shieldValue: actor?.hasShield ? shieldValueForType(actor.type) : 0,
     };
     if (!actor) return report;
@@ -537,7 +571,7 @@ function threatValue(actions) {
 }
 
 function shieldPressureValue(target) {
-    return 26 + shieldValueForType(target?.type) * 1.08 + (MATERIAL_VALUES[target?.type] ?? 0) * 0.1;
+    return 26 + shieldValueForType(target?.type) * 1.08 + materialValue(target?.type) * 0.1;
 }
 
 function controlScore(ownActions, enemyActions, color) {
@@ -650,7 +684,7 @@ function deathMoveThreatValue(state, square, color) {
             if (!target || target.isImmune || target.type === PIECE_TYPES.DEATH || isLightSquare(target.row, target.col)) continue;
             if (isProtectedFromDeathLike(state, target)) continue;
             const sign = ownerOf(target) === color ? -1 : 1;
-            value += sign * (110 + (MATERIAL_VALUES[target.type] ?? 0) * 0.34 + (target.hasShield ? shieldValueForType(target.type) * 0.55 : 0));
+            value += sign * (110 + materialValue(target.type) * 0.34 + (target.hasShield ? shieldValueForType(target.type) * 0.55 : 0));
         }
     }
     return value;
@@ -672,7 +706,7 @@ function lifeMoveHealValue(state, square, color) {
                 continue;
             }
             const sign = ownerOf(target) === color ? 1 : -0.75;
-            value += sign * (72 + shieldValueForType(target.type) * 0.95 + (MATERIAL_VALUES[target.type] ?? 0) * 0.08);
+            value += sign * (72 + shieldValueForType(target.type) * 0.95 + materialValue(target.type) * 0.08);
         }
     }
     return value;
@@ -700,14 +734,18 @@ function promotionPressure(state, color) {
 }
 
 function targetActionValue(action) {
-    const base = MATERIAL_VALUES[action.target?.type] ?? 0;
+    const base = materialValue(action.target?.type);
     if (action.target?.type === PIECE_TYPES.KING) return 100_000;
     return base + (action.target?.hadShield ? shieldValueForType(action.target.type) : 0);
 }
 
+function materialValue(type) {
+    return LIFE_DEATH_STRATEGIC_VALUES[type] ?? MATERIAL_VALUES[type] ?? 0;
+}
+
 function pieceStake(piece) {
     if (!piece) return 0;
-    return (MATERIAL_VALUES[piece.type] ?? 0) + (piece.hasShield ? shieldValueForType(piece.type) : 0);
+    return materialValue(piece.type) + (piece.hasShield ? shieldValueForType(piece.type) : 0);
 }
 
 function attackActionValue(action) {
@@ -725,26 +763,63 @@ function shieldValueForType(type) {
 }
 
 function healActionValue(state, action, color) {
-    const targetValue = MATERIAL_VALUES[action.target?.type] ?? 0;
+    const targetValue = materialValue(action.target?.type);
     const value = 150 + shieldValueForType(action.target?.type) * 2 + targetValue * 0.1;
     return ownerFromSnapshot(action.target) === color ? value : -value * 0.9;
 }
 
 function lifeDeathTransferScore(state, action, color) {
-    if (action.pieceType !== PIECE_TYPES.LIFE && action.pieceType !== PIECE_TYPES.DEATH) return 0;
+    if (!isLifeDeathType(action.pieceType)) return 0;
     const actor = findPieceById(state, action.pieceId);
     if (!actor || !action.to) return 0;
+    if (lifeDeathAnnihilationDoomed(state, action).length > 1) return 0;
 
     const beforeOwner = ownerOf(actor);
     const afterOwner = ownerAtRow(action.to.r);
     if (beforeOwner === afterOwner) return 0;
     if (action.target?.type === PIECE_TYPES.KING && ownerFromSnapshot(action.target) !== beforeOwner) return 120_000;
 
-    const specialValue = MATERIAL_VALUES[action.pieceType] ?? 0;
-    const handoffPenalty = specialValue * 6 + 900;
+    const specialValue = materialValue(action.pieceType);
+    const handoffPenalty = specialValue * (action.mode === 'kill' ? 7.2 : 6.2)
+        + (action.mode === 'kill' ? 1300 : 900);
     if (beforeOwner === color && afterOwner !== color) return -handoffPenalty;
     if (beforeOwner !== color && afterOwner === color) return handoffPenalty;
     return 0;
+}
+
+function lifeDeathAnnihilationScore(state, action, color) {
+    const doomed = lifeDeathAnnihilationDoomed(state, action);
+    if (doomed.length <= 1 || action.target?.type === PIECE_TYPES.KING) return 0;
+
+    let materialDelta = 0;
+    for (const piece of doomed) {
+        materialDelta += ownerOf(piece) === color ? -materialValue(piece.type) : materialValue(piece.type);
+    }
+
+    const actor = findPieceById(state, action.pieceId);
+    const actorValue = actor && ownerOf(actor) === color ? materialValue(actor.type) : 0;
+    const tradeFriction = actorValue > 0 ? Math.min(360, actorValue * 0.38) : 120;
+    return materialDelta - tradeFriction;
+}
+
+function lifeDeathAnnihilationDoomed(state, action) {
+    if (!isLifeDeathType(action.pieceType)) return [];
+    const actor = findPieceById(state, action.pieceId);
+    const destination = actionDestination(action);
+    if (!actor || !destination) return [];
+
+    const doomed = new Map([[actor.id, actor]]);
+    for (const [dr, dc] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+        const neighbor = getPiece(state.board, destination.r + dr, destination.c + dc);
+        if (!neighbor || neighbor.id === actor.id || !isLifeDeathType(neighbor.type)) continue;
+        if (neighbor.type === action.pieceType) continue;
+        doomed.set(neighbor.id, neighbor);
+    }
+    return [...doomed.values()];
+}
+
+function isLifeDeathType(type) {
+    return type === PIECE_TYPES.LIFE || type === PIECE_TYPES.DEATH;
 }
 
 function lifeDeathGateMoveBonus(state, action, color) {
@@ -844,6 +919,67 @@ function healPotentialScore(state, color) {
     return score;
 }
 
+function lifeCountsByOwner(state) {
+    const counts = new Map([
+        [COLORS.WHITE, 0],
+        [COLORS.BLACK, 0],
+    ]);
+    for (const piece of allPieces(state)) {
+        if (piece.type !== PIECE_TYPES.LIFE) continue;
+        counts.set(ownerOf(piece), (counts.get(ownerOf(piece)) ?? 0) + 1);
+    }
+    return counts;
+}
+
+function shieldRepairContextValue(piece, alliedLifeCount) {
+    if (
+        alliedLifeCount <= 0
+        || !canHaveShield(piece.type)
+        || !isLightSquare(piece.row, piece.col)
+        || piece.isIntimidated
+    ) {
+        return 0;
+    }
+
+    const typeWeight = piece.type === PIECE_TYPES.BISHOP
+        ? 1.35
+        : (piece.type === PIECE_TYPES.ROOK ? 1.1 : (piece.type === PIECE_TYPES.PAWN ? 0.75 : 1));
+    const shieldNeedWeight = piece.hasShield ? 0.42 : 1;
+    return (18 + Math.min(2, alliedLifeCount) * 16 + shieldValueForType(piece.type) * 0.18)
+        * typeWeight
+        * shieldNeedWeight;
+}
+
+function shieldRepairMultiplier(state, target, targetOwner) {
+    if (
+        !target
+        || !canHaveShield(target.type)
+        || target.hasShield
+        || target.isImmune
+        || target.isIntimidated
+        || !isLightSquare(target.row, target.col)
+    ) {
+        return 1;
+    }
+    if (canBeHealedByOwner(state, target, targetOwner)) return 0.48;
+
+    const alliedLifeCount = lifeCountForOwner(state, targetOwner);
+    if (alliedLifeCount <= 0) return 1;
+
+    let multiplier = 0.88 - Math.min(2, alliedLifeCount) * 0.08;
+    if (target.type === PIECE_TYPES.BISHOP) multiplier -= 0.08;
+    if (target.type === PIECE_TYPES.ROOK) multiplier -= 0.04;
+    return Math.max(0.62, multiplier);
+}
+
+function lifeCountForOwner(state, color) {
+    let count = 0;
+    for (const piece of allPieces(state)) {
+        if (piece.type === PIECE_TYPES.LIFE && ownerOf(piece) === color) count += 1;
+    }
+    return count;
+}
+
 function canBeHealedByOwner(state, target, healerOwner) {
     if (
         !target
@@ -902,12 +1038,12 @@ function pieceExposureRisk(state, pieceId, defenderColor) {
 
 function actionExposureValue(action) {
     if (action.target?.type === PIECE_TYPES.KING) return 2200;
-    const base = MATERIAL_VALUES[action.target?.type] ?? 0;
+    const base = materialValue(action.target?.type);
     const shield = action.target?.hadShield ? shieldValueForType(action.target.type) : 0;
     if (action.mode === 'kill') return base * 1.08 + shield + 130;
     if (action.kind === 'attack') {
         if (action.target?.hadShield) {
-            const attackerBase = MATERIAL_VALUES[action.pieceType] ?? 0;
+            const attackerBase = materialValue(action.pieceType);
             const cheapAttackerLeverage = Math.max(0, base - attackerBase) * 0.28;
             const pawnLever = action.pieceType === PIECE_TYPES.PAWN ? 130 : 0;
             return shieldPressureValue(action.target) + cheapAttackerLeverage + pawnLever;

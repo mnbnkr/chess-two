@@ -325,7 +325,7 @@ function generateKnightMoves(state, piece) {
             from: { r: piece.row, c: piece.col },
             to: { r: jump.r, c: jump.c },
             rampSequence: jump.sequence,
-            path: [],
+            path: jump.sequence.map((step) => ({ ...step.ramp })),
             consumes: { standard: true, special: false },
         }));
     }
@@ -347,6 +347,7 @@ function knightRampDestinations(state, piece) {
             sequence: sequence.map((step) => ({
                 ramp: { ...step.ramp },
                 land: { ...step.land },
+                rampType: step.rampType,
             })),
         });
     };
@@ -360,10 +361,10 @@ function knightRampDestinations(state, piece) {
                 const land = { r: from.r + dr * 2, c: from.c + dc * 2 };
                 if (!isValidSquare(ramp.r, ramp.c) || !isValidSquare(land.r, land.c)) continue;
                 const rampPiece = getPiece(state.board, ramp.r, ramp.c);
-                if (!rampPiece || LIFE_DEATH_PIECES.has(rampPiece.type)) continue;
+                if (!rampPiece) continue;
                 if (visited.has(squareKey(land))) continue;
                 if (getPiece(state.board, land.r, land.c)) continue;
-                jumps.push({ land, ramp });
+                jumps.push({ land, ramp, rampType: rampPiece.type });
             }
         }
         return jumps;
@@ -372,13 +373,13 @@ function knightRampDestinations(state, piece) {
     const firstVisited = new Set([squareKey(original)]);
     for (const first of singleJumps(original, firstVisited)) {
         const firstKey = squareKey(first.land);
-        pushRoute(first.land, [{ ramp: first.ramp, land: first.land }]);
+        pushRoute(first.land, [{ ramp: first.ramp, land: first.land, rampType: first.rampType }]);
 
         const secondVisited = new Set([squareKey(original), firstKey]);
         for (const second of singleJumps(first.land, secondVisited)) {
             pushRoute(second.land, [
-                { ramp: first.ramp, land: first.land },
-                { ramp: second.ramp, land: second.land },
+                { ramp: first.ramp, land: first.land, rampType: first.rampType },
+                { ramp: second.ramp, land: second.land, rampType: second.rampType },
             ]);
         }
     }
@@ -581,6 +582,8 @@ function buildAttackActions(state, attacker, target, staging, details) {
             r: target.row,
             c: target.col,
             hadShield: target.hasShield,
+            isIntimidated: target.isIntimidated,
+            intimidationSuppressedShield: target.intimidationSuppressedShield,
         },
         from: { r: attacker.row, c: attacker.col },
         to: { r: target.row, c: target.col },
@@ -729,8 +732,9 @@ function isProtectedFromDeath(target, state) {
     return false;
 }
 
-export function applyAction(state, action) {
-    const next = cloneState(state);
+export function applyAction(state, action, options = {}) {
+    const recordHistoryEntry = options.recordHistory ?? true;
+    const next = cloneState(state, { preserveHistory: recordHistoryEntry });
     if (next.gameOver) return next;
     const actorColor = next.currentPlayer;
     const previousEnPassant = next.enPassant ? { ...next.enPassant } : null;
@@ -739,8 +743,10 @@ export function applyAction(state, action) {
     if (action.kind === 'attack') applyAttackAction(next, action);
     if (action.kind === 'special') applySpecialAction(next, action);
 
-    next.lastAction = { ...structuredClone(action), color: actorColor };
-    recordAction(next, next.lastAction);
+    if (recordHistoryEntry) {
+        next.lastAction = { ...structuredClone(action), color: actorColor };
+        recordAction(next, next.lastAction);
+    }
 
     if (next.gameOver) {
         clearIntimidation(next);
@@ -818,7 +824,13 @@ function applySpecialAction(state, action) {
     if (!piece || !target) return;
 
     if (action.mode === 'heal') {
-        if (canHaveShield(target.type) && !target.hasShield && !target.isIntimidated) {
+        if (
+            canHaveShield(target.type)
+            && !target.hasShield
+            && !target.isImmune
+            && !target.isIntimidated
+            && isLightSquare(target.row, target.col)
+        ) {
             target.hasShield = true;
             target.isImmune = true;
             target.immunityGrantedBy = ownerOf(piece);
@@ -826,7 +838,13 @@ function applySpecialAction(state, action) {
         return;
     }
 
-    if (action.mode === 'kill' && !target.isImmune) {
+    if (
+        action.mode === 'kill'
+        && !target.isImmune
+        && target.type !== PIECE_TYPES.DEATH
+        && isDarkSquare(target.row, target.col)
+        && !isProtectedFromDeath(target, state)
+    ) {
         removePiece(state, target);
         setPiece(state.board, piece.row, piece.col, null);
         setPiece(state.board, action.to.r, action.to.c, piece);

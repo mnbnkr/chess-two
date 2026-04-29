@@ -1,5 +1,6 @@
 import {
     COLORS,
+    PIECE_TYPES,
     applyAction,
     canSkipSpecialMove,
     chooseAiAction,
@@ -194,7 +195,7 @@ export class GameController {
             selectedPiece: piece,
             selectedActions: actions,
             phaseInfo: `${piece.type} selected.`,
-            highlights: highlightsForActions(actions, piece),
+            highlights: highlightsForActions(this.state, actions, piece),
         };
         this.render();
     }
@@ -357,9 +358,16 @@ export class GameController {
             if (!this.isPlayingAgainstAi() || this.state.gameOver || this.state.currentPlayer !== AI_COLOR) break;
             const action = chooseAiAction(this.state, AI_COLOR, aiOptions);
             if (!action) break;
+            const statusState = this.state;
             const previous = this.animator.snapshot();
             this.state = applyAction(this.state, action);
-            this.view = { ...this.createEmptyView(), isAiThinking: this.state.currentPlayer === AI_COLOR };
+            const holdAiTurnStatus = !this.state.gameOver && this.state.currentPlayer !== AI_COLOR;
+            this.view = {
+                ...this.createEmptyView(),
+                isAiThinking: this.state.currentPlayer === AI_COLOR,
+                isAiAnimating: holdAiTurnStatus,
+                statusState: holdAiTurnStatus ? statusState : null,
+            };
             this.render();
             this.animator.animate(previous, action, this.settings.animationsEnabled);
             await delay(this.animationDelay(action));
@@ -399,24 +407,68 @@ export class GameController {
     }
 }
 
-function highlightsForActions(actions, selectedPiece) {
+function highlightsForActions(state, actions, selectedPiece) {
     const highlights = emptyHighlights();
+    const moveActions = actions.filter((action) => action.kind === 'move' && action.to);
+    const moveGroups = groupByDestination(moveActions.filter((action) => action.mode !== 'knightRamp'));
+    const rampGroups = groupByDestination(moveActions.filter((action) => action.mode === 'knightRamp'));
+
+    for (const [key, candidates] of moveGroups) {
+        if (candidates.every((action) => movePassesThroughDeath(state, action))) highlights.deathMoves.add(key);
+        else highlights.moves.add(key);
+    }
+
+    for (const [key, candidates] of rampGroups) {
+        if (candidates.every((action) => movePassesThroughDeath(state, action))) highlights.deathRampMoves.add(key);
+        else highlights.rampMoves.add(key);
+    }
+
     for (const action of actions) {
-        if (action.kind === 'move' && action.mode === 'knightRamp') highlights.rampMoves.add(squareKey(action.to));
-        else if (action.kind === 'move') highlights.moves.add(squareKey(action.to));
         if (action.kind === 'attack') highlights.attacks.add(squareKey(action.to));
         if (action.kind === 'special') highlights.specials.add(squareKey(action.to));
     }
     highlights.moves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     highlights.rampMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
+    highlights.deathMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
+    highlights.deathRampMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     return highlights;
 }
 
+function groupByDestination(actions) {
+    const groups = new Map();
+    for (const action of actions) {
+        const key = squareKey(action.to);
+        groups.set(key, [...(groups.get(key) ?? []), action]);
+    }
+    return groups;
+}
+
+function movePassesThroughDeath(state, action) {
+    if (action.deathLanding) return true;
+    return (action.path ?? []).some((square) => state.board[square.r]?.[square.c]?.type === PIECE_TYPES.DEATH);
+}
+
 function chooseKnightRampAction(candidates) {
-    const shortestLength = Math.min(...candidates.map((action) => action.rampSequence?.length ?? 1));
-    const shortest = candidates.filter((action) => (action.rampSequence?.length ?? 1) === shortestLength);
-    if (shortest.length === 1) return shortest[0];
-    return shortest[Math.floor(Math.random() * shortest.length)];
+    const bestScore = Math.max(...candidates.map(knightRampRouteScore));
+    const bestRoutes = candidates.filter((action) => knightRampRouteScore(action) === bestScore);
+    const shortestLength = Math.min(...bestRoutes.map(knightRampRouteLength));
+    const preferred = bestRoutes.filter((action) => knightRampRouteLength(action) === shortestLength);
+    if (preferred.length === 1) return preferred[0];
+    return preferred[Math.floor(Math.random() * preferred.length)];
+}
+
+function knightRampRouteLength(action) {
+    return action.rampSequence?.length ?? 1;
+}
+
+function knightRampRouteScore(action) {
+    let lifeCount = 0;
+    let deathCount = 0;
+    for (const step of action.rampSequence ?? []) {
+        if (step.rampType === PIECE_TYPES.LIFE) lifeCount += 1;
+        if (step.rampType === PIECE_TYPES.DEATH) deathCount += 1;
+    }
+    return lifeCount * 100 - deathCount * 1000;
 }
 
 function uniqueSquareKeys(squares) {

@@ -95,7 +95,8 @@ Knights have two standard-action modes (mutually exclusive):
 Ramp rules:
 
 - The ramp piece may be friendly or enemy.
-- Life and Death pieces cannot be used as ramps.
+- Life and Death pieces may be used as ramps, and their pass-through effects apply to the Knight.
+- If multiple ramp routes reach the same destination, routes that avoid Death ramps are preferred even when they take an extra jump; routes over Life ramps are preferred even when a neutral route is available.
 - A Knight may make up to two ramp jumps in one standard move.
 - A Knight cannot land on a square it already occupied during the current move.
 - Knights cannot use their L-shaped pattern to move to an empty square. Their non-attacking moves to empty squares come only from ramp jumps.

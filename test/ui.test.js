@@ -464,6 +464,38 @@ test('renderer flashes the player badge only when the turn reaches the player si
     globalThis.document = previousDocument;
 });
 
+test('renderer can hold the visible turn during AI move resolution', () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+    };
+
+    const state = createGameState();
+    state.currentPlayer = COLORS.WHITE;
+    const heldState = createGameState();
+    heldState.currentPlayer = COLORS.BLACK;
+    const status = makeStatusPanel();
+    const renderer = new Renderer({
+        boardEl: new FakeElement('div'),
+        statusPanelEl: status,
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    renderer.render(state, {
+        statusState: heldState,
+        isAiAnimating: true,
+    });
+
+    expect(status.querySelector('#player-turn').textContent).toBe('Black');
+    expect(status.querySelector('#player-turn').className).toContain('black');
+    expect(status.querySelector('#phase-info').textContent).toBe('Black AI is finishing its move...');
+
+    globalThis.document = previousDocument;
+});
+
 test('renderer distinguishes knight ramp highlights from ordinary moves', () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
@@ -487,6 +519,38 @@ test('renderer distinguishes knight ramp highlights from ordinary moves', () => 
     expect(board.children[55].children[0].className).toContain('valid-move');
     expect(board.children[57].children[0].className).toContain('valid-ramp');
     expect(board.children[57].children[0].className).not.toContain('valid-move');
+
+    globalThis.document = previousDocument;
+});
+
+test('renderer distinguishes Death-only move and ramp highlights from safe previews', () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+    };
+
+    const board = new FakeElement('div');
+    const highlights = emptyHighlights();
+    highlights.moves.add('5,5');
+    highlights.deathMoves.add('5,6');
+    highlights.rampMoves.add('5,7');
+    highlights.deathRampMoves.add('5,8');
+    const renderer = new Renderer({
+        boardEl: board,
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+    renderer.render(createGameState(), { highlights });
+
+    expect(board.children[55].children[0].className).toContain('valid-move');
+    expect(board.children[56].children[0].className).toContain('valid-death-move');
+    expect(board.children[57].children[0].className).toContain('valid-ramp');
+    expect(board.children[58].children[0].className).toContain('valid-death-ramp');
+    expect(board.children[56].children[0].className).not.toContain('valid-move');
+    expect(board.children[58].children[0].className).not.toContain('valid-ramp');
 
     globalThis.document = previousDocument;
 });
@@ -569,6 +633,292 @@ test('controller auto-selects one Knight ramp route when a destination has multi
     expect(controller.state.lastAction.rampSequence[0].land).toEqual({ r: 7, c: 7 });
     controller.settings.animationsEnabled = true;
     expect(controller.animationDelay(controller.state.lastAction)).toBe(ANIMATION_TIMING.doubleRampHopDurationMs * 2 + 60);
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller marks ordinary move destinations after Death pass-through as grey previews', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const board = new FakeElement('div');
+    const controller = new GameController({
+        boardEl: board,
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const rook = placePiece(controller.state.board, createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 5, 0, { id: 'rook' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 5, 2, { id: 'death' }));
+    controller.selectPiece(rook);
+
+    expect(board.children[51].children[0].className).toContain('valid-move');
+    expect(board.children[51].children[0].className).not.toContain('valid-death-move');
+    expect(board.children[52].children[1].className).toContain('valid-death-move');
+    expect(board.children[53].children[0].className).toContain('valid-death-move');
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller keeps a Knight destination green when any route avoids Death', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const board = new FakeElement('div');
+    const controller = new GameController({
+        boardEl: board,
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 4, 6, { id: 'death-ramp' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 5, { id: 'safe-ramp-a' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 3, 6, { id: 'safe-ramp-b' }));
+    controller.selectPiece(knight);
+
+    expect(board.children[37].children[0].className).toContain('valid-ramp');
+    expect(board.children[37].children[0].className).not.toContain('valid-death-ramp');
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller marks Knight destinations grey when every route crosses Death', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const board = new FakeElement('div');
+    const controller = new GameController({
+        boardEl: board,
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 4, 6, { id: 'death-ramp' }));
+    controller.selectPiece(knight);
+
+    expect(board.children[37].children[0].className).toContain('valid-death-ramp');
+    expect(board.children[37].children[0].className).not.toContain('valid-ramp');
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller prefers Knight ramp routes that avoid Death ramps', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const controller = new GameController({
+        boardEl: new FakeElement('div'),
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 4, 6, { id: 'death-ramp' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 8, { id: 'upper-ramp-b' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 6, { id: 'lower-ramp-a' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 8, { id: 'lower-ramp-b' }));
+    controller.selectPiece(knight);
+
+    const previousRandom = Math.random;
+    Math.random = () => 0;
+    try {
+        controller.handleBoardClick({
+            target: {
+                closest: () => ({ dataset: { row: '5', col: '9' } }),
+            },
+        });
+    } finally {
+        Math.random = previousRandom;
+    }
+
+    expect(controller.state.board[5][9]?.id).toBe('knight');
+    expect(controller.state.lastAction.rampSequence[0].land).toEqual({ r: 7, c: 7 });
+    expect(controller.state.lastAction.path.some((square) => square.r === 4 && square.c === 6)).toBe(false);
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller prefers a longer Knight ramp route over a shorter Death ramp', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const controller = new GameController({
+        boardEl: new FakeElement('div'),
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: 'knight' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 4, 6, { id: 'death-ramp' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 5, { id: 'safe-ramp-a' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 3, 6, { id: 'safe-ramp-b' }));
+    controller.selectPiece(knight);
+
+    controller.handleBoardClick({
+        target: {
+            closest: () => ({ dataset: { row: '3', col: '7' } }),
+        },
+    });
+
+    expect(controller.state.board[3][7]?.id).toBe('knight');
+    expect(controller.state.lastAction.rampSequence).toHaveLength(2);
+    expect(controller.state.lastAction.path.some((square) => square.r === 4 && square.c === 6)).toBe(false);
+    expect(controller.state.lastAction.path).toEqual([
+        { r: 4, c: 5 },
+        { r: 3, c: 6 },
+    ]);
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller prefers Knight ramp routes with Life ramps when no Death route is involved', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const controller = new GameController({
+        boardEl: new FakeElement('div'),
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, {
+        id: 'knight',
+        hasShield: false,
+    }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 4, 5, { id: 'life-ramp' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 2, 5, { id: 'upper-ramp-b' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 4, { id: 'neutral-ramp-a' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 2, 4, { id: 'neutral-ramp-b' }));
+    controller.selectPiece(knight);
+
+    const previousRandom = Math.random;
+    Math.random = () => 0.99;
+    try {
+        controller.handleBoardClick({
+            target: {
+                closest: () => ({ dataset: { row: '1', col: '5' } }),
+            },
+        });
+    } finally {
+        Math.random = previousRandom;
+    }
+
+    expect(controller.state.board[1][5]?.id).toBe('knight');
+    expect(controller.state.board[1][5].hasShield).toBe(true);
+    expect(controller.state.lastAction.rampSequence[0].land).toEqual({ r: 3, c: 5 });
+    expect(controller.state.lastAction.path.some((square) => square.r === 4 && square.c === 5)).toBe(true);
+
+    globalThis.document = previousDocument;
+    globalThis.localStorage = previousLocalStorage;
+});
+
+test('controller prefers a shorter Life ramp over a longer neutral Knight ramp route', () => {
+    const previousDocument = globalThis.document;
+    const previousLocalStorage = globalThis.localStorage;
+    globalThis.document = {
+        createElement: (tagName) => new FakeElement(tagName),
+        addEventListener() {},
+    };
+    globalThis.localStorage = null;
+
+    const controller = new GameController({
+        boardEl: new FakeElement('div'),
+        statusPanelEl: makeStatusPanel(),
+        promotionEl: new FakeElement('div'),
+        controlsEl: makeControls(),
+        settingsEl: makeSettingsPanel(),
+        rulesEl: makeRulesPanel(),
+    });
+
+    controller.settings = { aiLevel: 0, animationsEnabled: false, playerSide: 'white' };
+    controller.state = createEmptyState(COLORS.WHITE);
+    const knight = placePiece(controller.state.board, createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, {
+        id: 'knight',
+        hasShield: false,
+    }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 4, 6, { id: 'life-ramp' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 5, { id: 'neutral-ramp-a' }));
+    placePiece(controller.state.board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 3, 6, { id: 'neutral-ramp-b' }));
+    controller.selectPiece(knight);
+
+    controller.handleBoardClick({
+        target: {
+            closest: () => ({ dataset: { row: '3', col: '7' } }),
+        },
+    });
+
+    expect(controller.state.board[3][7]?.id).toBe('knight');
+    expect(controller.state.board[3][7].hasShield).toBe(true);
+    expect(controller.state.lastAction.rampSequence).toHaveLength(1);
+    expect(controller.state.lastAction.path).toEqual([{ r: 4, c: 6 }]);
 
     globalThis.document = previousDocument;
     globalThis.localStorage = previousLocalStorage;
@@ -717,6 +1067,181 @@ test('board animator plays double Knight ramp as two chained hop animations with
     expect(animations[1].keyframes.at(-1).transform).toContain('translate(0px, 0px) scale(1)');
 });
 
+test('board animator keeps a Knight shield until the Death ramp hop is reached', () => {
+    const previousSetTimeout = globalThis.setTimeout;
+    const previousClearTimeout = globalThis.clearTimeout;
+    const timers = [];
+    globalThis.setTimeout = (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length;
+    };
+    globalThis.clearTimeout = () => {};
+
+    const squareEl = new FakeElement('button');
+    const pieceEl = new FakeElement('span');
+    pieceEl.dataset.pieceId = 'knight';
+    pieceEl.className = 'piece white';
+    pieceEl.getBoundingClientRect = () => ({ left: 90, top: 50, width: 10, height: 10 });
+    pieceEl.closest = () => squareEl;
+    pieceEl.animate = () => ({
+        finished: new Promise(() => {}),
+        cancel() {},
+    });
+
+    const animator = new BoardAnimator({
+        querySelectorAll: (selector) => (selector === '[data-piece-id]' ? [pieceEl] : []),
+        querySelector: () => null,
+    });
+
+    animator.animateMovement({
+        pieces: new Map([[
+            'knight',
+            {
+                rect: { left: 50, top: 50, width: 10, height: 10 },
+                className: 'piece white has-shield',
+            },
+        ]]),
+        squares: new Map([
+            ['3,7', { left: 70, top: 30, width: 10, height: 10 }],
+            ['5,9', { left: 90, top: 50, width: 10, height: 10 }],
+        ]),
+        squarePieces: new Map([
+            ['4,6', { className: 'piece black' }],
+            ['4,8', { className: 'piece death-piece' }],
+        ]),
+    }, {
+        mode: 'knightRamp',
+        pieceId: 'knight',
+        path: [
+            { r: 4, c: 6 },
+            { r: 4, c: 8 },
+        ],
+        rampSequence: [
+            { ramp: { r: 4, c: 6 }, land: { r: 3, c: 7 } },
+            { ramp: { r: 4, c: 8 }, land: { r: 5, c: 9 } },
+        ],
+    });
+
+    expect(pieceEl.className).toContain('has-shield');
+    expect(timers).toHaveLength(1);
+    expect(timers[0].ms).toBeGreaterThan(ANIMATION_TIMING.doubleRampHopDurationMs);
+    expect(timers[0].ms).toBeLessThan(ANIMATION_TIMING.doubleRampHopDurationMs + 140);
+
+    timers[0].fn();
+    expect(pieceEl.className).not.toContain('has-shield');
+
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+});
+
+test('board animator delays Life pass-through shield gain until the Life square is crossed', () => {
+    const previousSetTimeout = globalThis.setTimeout;
+    const previousClearTimeout = globalThis.clearTimeout;
+    const timers = [];
+    globalThis.setTimeout = (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length;
+    };
+    globalThis.clearTimeout = () => {};
+
+    const squareEl = new FakeElement('button');
+    const pieceEl = new FakeElement('span');
+    pieceEl.dataset.pieceId = 'rook';
+    pieceEl.className = 'piece white has-shield';
+    pieceEl.getBoundingClientRect = () => ({ left: 90, top: 50, width: 10, height: 10 });
+    pieceEl.closest = () => squareEl;
+    pieceEl.animate = () => ({
+        finished: new Promise(() => {}),
+        cancel() {},
+    });
+
+    const animator = new BoardAnimator({
+        querySelectorAll: (selector) => (selector === '[data-piece-id]' ? [pieceEl] : []),
+        querySelector: () => null,
+    });
+
+    animator.animateMovement({
+        pieces: new Map([[
+            'rook',
+            {
+                rect: { left: 50, top: 50, width: 10, height: 10 },
+                className: 'piece white',
+            },
+        ]]),
+        squares: new Map(),
+        squarePieces: new Map([
+            ['5,2', { className: 'piece life-piece' }],
+        ]),
+    }, {
+        mode: 'slide',
+        pieceId: 'rook',
+        path: [{ r: 5, c: 2 }],
+    });
+
+    expect(pieceEl.className).not.toContain('has-shield');
+    expect(timers).toHaveLength(1);
+    expect(timers[0].ms).toBeLessThan(160);
+    timers[0].fn();
+    expect(pieceEl.className).toContain('has-shield');
+
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+});
+
+test('board animator times normal Death pass-through near the visual crossing point', () => {
+    const previousSetTimeout = globalThis.setTimeout;
+    const previousClearTimeout = globalThis.clearTimeout;
+    const timers = [];
+    globalThis.setTimeout = (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length;
+    };
+    globalThis.clearTimeout = () => {};
+
+    const squareEl = new FakeElement('button');
+    const pieceEl = new FakeElement('span');
+    pieceEl.dataset.pieceId = 'rook';
+    pieceEl.className = 'piece white';
+    pieceEl.getBoundingClientRect = () => ({ left: 90, top: 50, width: 10, height: 10 });
+    pieceEl.closest = () => squareEl;
+    pieceEl.animate = () => ({
+        finished: new Promise(() => {}),
+        cancel() {},
+    });
+
+    const animator = new BoardAnimator({
+        querySelectorAll: (selector) => (selector === '[data-piece-id]' ? [pieceEl] : []),
+        querySelector: () => null,
+    });
+
+    animator.animateMovement({
+        pieces: new Map([[
+            'rook',
+            {
+                rect: { left: 50, top: 50, width: 10, height: 10 },
+                className: 'piece white has-shield',
+            },
+        ]]),
+        squares: new Map(),
+        squarePieces: new Map([
+            ['5,2', { className: 'piece death-piece' }],
+        ]),
+    }, {
+        mode: 'slide',
+        pieceId: 'rook',
+        path: [{ r: 5, c: 2 }],
+    });
+
+    expect(pieceEl.className).toContain('has-shield');
+    expect(timers).toHaveLength(1);
+    expect(timers[0].ms).toBeLessThan(160);
+    timers[0].fn();
+    expect(pieceEl.className).not.toContain('has-shield');
+
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+});
+
 test('single Knight ramp uses the normal move timer, not the double-ramp cadence', () => {
     const action = {
         mode: 'knightRamp',
@@ -808,11 +1333,19 @@ test('settings persist and AI slider maps to stronger search options', () => {
     saveSettings({ aiLevel: 0, animationsEnabled: true, playerSide: 'white' }, storage);
     expect(loadSettings(storage).aiLevel).toBe(0);
     expect(aiLabelForLevel(0)).toBe('Off (self-play)');
-    expect(aiOptionsForLevel(5).maxDepth).toBeGreaterThanOrEqual(aiOptionsForLevel(1).maxDepth);
-    expect(aiOptionsForLevel(5).maxActions).toBeGreaterThanOrEqual(aiOptionsForLevel(1).maxActions);
+    for (const level of [1, 2, 3, 4]) {
+        expect(aiOptionsForLevel(level).maxDepth).toBe(level);
+        expect(aiOptionsForLevel(level + 1).maxActions).toBeGreaterThanOrEqual(aiOptionsForLevel(level).maxActions);
+        expect(aiOptionsForLevel(level + 1).maxTacticalActions).toBeGreaterThanOrEqual(aiOptionsForLevel(level).maxTacticalActions);
+    }
+    expect(aiOptionsForLevel(5).maxDepth).toBe(7);
     expect(aiOptionsForLevel(5).maxDepth).toBeGreaterThan(aiOptionsForLevel(4).maxDepth);
     expect(aiOptionsForLevel(5).quiescenceDepth).toBeGreaterThan(aiOptionsForLevel(1).quiescenceDepth);
     expect(aiOptionsForLevel(5).tacticalWeight).toBeGreaterThan(aiOptionsForLevel(1).tacticalWeight);
+    expect(aiOptionsForLevel(4).timeLimitMs).toBe(1200);
+    expect(aiOptionsForLevel(4).hardTimeLimitMs).toBe(2000);
+    expect(aiOptionsForLevel(5).timeLimitMs).toBe(2600);
+    expect(aiOptionsForLevel(5).hardTimeLimitMs).toBe(4200);
     expect(aiOptionsForLevel(5).timeLimitMs).toBeGreaterThan(aiOptionsForLevel(4).timeLimitMs);
     expect(aiOptionsForLevel(5).hardTimeLimitMs).toBeGreaterThan(aiOptionsForLevel(5).timeLimitMs);
     expect(aiOptionsForLevel(5).thinkDelay).toBeLessThan(aiOptionsForLevel(1).thinkDelay);

@@ -118,7 +118,8 @@
   function clonePiece(piece) {
     return piece ? { ...piece } : null;
   }
-  function cloneState(state) {
+  function cloneState(state, options = {}) {
+    const preserveHistory = options.preserveHistory ?? true;
     const board = createBoard();
     for (let r = 0;r < BOARD_SIZE; r++) {
       for (let c = 0;c < BOARD_SIZE; c++) {
@@ -137,8 +138,8 @@
         crossed: state.enPassant.crossed.map((sq) => ({ ...sq }))
       } : null,
       gameOver: state.gameOver ? { ...state.gameOver } : null,
-      lastAction: state.lastAction ? structuredClone(state.lastAction) : null,
-      actionHistory: state.actionHistory ? structuredClone(state.actionHistory) : []
+      lastAction: preserveHistory && state.lastAction ? structuredClone(state.lastAction) : null,
+      actionHistory: preserveHistory && state.actionHistory ? structuredClone(state.actionHistory) : []
     };
   }
   function getPiece(board, row, col) {
@@ -530,7 +531,7 @@
         from: { r: piece.row, c: piece.col },
         to: { r: jump.r, c: jump.c },
         rampSequence: jump.sequence,
-        path: [],
+        path: jump.sequence.map((step) => ({ ...step.ramp })),
         consumes: { standard: true, special: false }
       }));
     }
@@ -549,7 +550,8 @@
         ...land,
         sequence: sequence.map((step) => ({
           ramp: { ...step.ramp },
-          land: { ...step.land }
+          land: { ...step.land },
+          rampType: step.rampType
         }))
       });
     };
@@ -564,13 +566,13 @@
           if (!isValidSquare(ramp.r, ramp.c) || !isValidSquare(land.r, land.c))
             continue;
           const rampPiece = getPiece(state.board, ramp.r, ramp.c);
-          if (!rampPiece || LIFE_DEATH_PIECES.has(rampPiece.type))
+          if (!rampPiece)
             continue;
           if (visited.has(squareKey(land)))
             continue;
           if (getPiece(state.board, land.r, land.c))
             continue;
-          jumps.push({ land, ramp });
+          jumps.push({ land, ramp, rampType: rampPiece.type });
         }
       }
       return jumps;
@@ -578,12 +580,12 @@
     const firstVisited = new Set([squareKey(original)]);
     for (const first of singleJumps(original, firstVisited)) {
       const firstKey = squareKey(first.land);
-      pushRoute(first.land, [{ ramp: first.ramp, land: first.land }]);
+      pushRoute(first.land, [{ ramp: first.ramp, land: first.land, rampType: first.rampType }]);
       const secondVisited = new Set([squareKey(original), firstKey]);
       for (const second of singleJumps(first.land, secondVisited)) {
         pushRoute(second.land, [
-          { ramp: first.ramp, land: first.land },
-          { ramp: second.ramp, land: second.land }
+          { ramp: first.ramp, land: first.land, rampType: first.rampType },
+          { ramp: second.ramp, land: second.land, rampType: second.rampType }
         ]);
       }
     }
@@ -797,7 +799,9 @@
         color: target.color,
         r: target.row,
         c: target.col,
-        hadShield: target.hasShield
+        hadShield: target.hasShield,
+        isIntimidated: target.isIntimidated,
+        intimidationSuppressedShield: target.intimidationSuppressedShield
       },
       from: { r: attacker.row, c: attacker.col },
       to: { r: target.row, c: target.col },
@@ -947,8 +951,9 @@
     }
     return false;
   }
-  function applyAction(state, action) {
-    const next = cloneState(state);
+  function applyAction(state, action, options = {}) {
+    const recordHistoryEntry = options.recordHistory ?? true;
+    const next = cloneState(state, { preserveHistory: recordHistoryEntry });
     if (next.gameOver)
       return next;
     const actorColor = next.currentPlayer;
@@ -959,8 +964,10 @@
       applyAttackAction(next, action);
     if (action.kind === "special")
       applySpecialAction(next, action);
-    next.lastAction = { ...structuredClone(action), color: actorColor };
-    recordAction(next, next.lastAction);
+    if (recordHistoryEntry) {
+      next.lastAction = { ...structuredClone(action), color: actorColor };
+      recordAction(next, next.lastAction);
+    }
     if (next.gameOver) {
       clearIntimidation(next);
       return next;
@@ -1028,14 +1035,14 @@
     if (!piece || !target)
       return;
     if (action.mode === "heal") {
-      if (canHaveShield(target.type) && !target.hasShield && !target.isIntimidated) {
+      if (canHaveShield(target.type) && !target.hasShield && !target.isImmune && !target.isIntimidated && isLightSquare(target.row, target.col)) {
         target.hasShield = true;
         target.isImmune = true;
         target.immunityGrantedBy = ownerOf(piece);
       }
       return;
     }
-    if (action.mode === "kill" && !target.isImmune) {
+    if (action.mode === "kill" && !target.isImmune && target.type !== PIECE_TYPES.DEATH && isDarkSquare(target.row, target.col) && !isProtectedFromDeath(target, state)) {
       removePiece(state, target);
       setPiece(state.board, piece.row, piece.col, null);
       setPiece(state.board, action.to.r, action.to.c, piece);
@@ -1283,6 +1290,10 @@
     hardTimeLimitMs: 0,
     depthStartMargin: 1.75
   };
+  var LIFE_DEATH_STRATEGIC_VALUES = {
+    [PIECE_TYPES.LIFE]: 460,
+    [PIECE_TYPES.DEATH]: 760
+  };
   function chooseAiAction(state, color = "black", options = {}) {
     const settings = { ...DEFAULT_OPTIONS, ...options };
     settings.transposition = new Map;
@@ -1322,7 +1333,7 @@
         settings.timedOut = true;
         return { action: bestAction, score: bestScore, completed: false };
       }
-      const next = applyAction(state, action);
+      const next = applySearchAction(state, action);
       const score = (depth <= 1 ? evaluateState(next, color) : minimax(next, depth - 1, alpha, beta, color, settings)) + actionHeuristic(state, action, color) * rootHeuristicWeight(depth) + rootTacticalScore(state, next, action, color, settings);
       if (score > bestScore || score === bestScore && compareAiActions(state, action, bestAction, color) < 0) {
         bestScore = score;
@@ -1352,7 +1363,7 @@
     if (maximizing) {
       let value2 = Number.NEGATIVE_INFINITY;
       for (const action of actions) {
-        value2 = Math.max(value2, minimax(applyAction(state, action), depth - 1, alpha, beta, aiColor, settings));
+        value2 = Math.max(value2, minimax(applySearchAction(state, action), depth - 1, alpha, beta, aiColor, settings));
         alpha = Math.max(alpha, value2);
         if (alpha >= beta)
           break;
@@ -1363,7 +1374,7 @@
     }
     let value = Number.POSITIVE_INFINITY;
     for (const action of actions) {
-      value = Math.min(value, minimax(applyAction(state, action), depth - 1, alpha, beta, aiColor, settings));
+      value = Math.min(value, minimax(applySearchAction(state, action), depth - 1, alpha, beta, aiColor, settings));
       beta = Math.min(beta, value);
       if (alpha >= beta)
         break;
@@ -1387,7 +1398,7 @@
       let value2 = standPat;
       alpha = Math.max(alpha, value2);
       for (const action of actions) {
-        value2 = Math.max(value2, quiescence(applyAction(state, action), depth - 1, alpha, beta, aiColor, settings));
+        value2 = Math.max(value2, quiescence(applySearchAction(state, action), depth - 1, alpha, beta, aiColor, settings));
         alpha = Math.max(alpha, value2);
         if (isTimeUp(settings))
           settings.timedOut = true;
@@ -1399,7 +1410,7 @@
     let value = standPat;
     beta = Math.min(beta, value);
     for (const action of actions) {
-      value = Math.min(value, quiescence(applyAction(state, action), depth - 1, alpha, beta, aiColor, settings));
+      value = Math.min(value, quiescence(applySearchAction(state, action), depth - 1, alpha, beta, aiColor, settings));
       beta = Math.min(beta, value);
       if (isTimeUp(settings))
         settings.timedOut = true;
@@ -1408,6 +1419,9 @@
     }
     return value;
   }
+  function applySearchAction(state, action) {
+    return applyAction(state, action, { recordHistory: false });
+  }
   function evaluateState(state, color = "black") {
     if (state.gameOver) {
       if (!state.gameOver.winner)
@@ -1415,9 +1429,10 @@
       return state.gameOver.winner === color ? 1e6 : -1e6;
     }
     let score = 0;
+    const lifeCounts = lifeCountsByOwner(state);
     for (const piece of allPieces(state)) {
       const sign = ownerOf(piece) === color ? 1 : -1;
-      let value = MATERIAL_VALUES[piece.type] ?? 0;
+      let value = materialValue(piece.type);
       if (piece.hasShield)
         value += shieldValueForType(piece.type);
       if (piece.isImmune)
@@ -1429,6 +1444,7 @@
       value += positionalValue(piece, state, color);
       if (piece.type === PIECE_TYPES.LIFE || piece.type === PIECE_TYPES.DEATH)
         value += lifeDeathPositionValue(piece);
+      value += shieldRepairContextValue(piece, lifeCounts.get(ownerOf(piece)) ?? 0);
       score += sign * value;
     }
     const ownKing = findKing(state, color);
@@ -1491,6 +1507,9 @@
       score += targetSign * 80000;
     if (action.kind === "attack")
       score += targetSign * attackActionValue(action);
+    if (action.kind === "attack" && action.target?.isIntimidated) {
+      score += targetSign * intimidatedTargetActionValue(action);
+    }
     if (action.mode === "kill") {
       const targetValue = targetActionValue(action);
       score += targetSign * (850 + targetValue * 2.4);
@@ -1507,7 +1526,7 @@
     if (action.mode === "castle")
       score += actorSign * 90;
     if (action.promotionType)
-      score += actorSign * (MATERIAL_VALUES[action.promotionType] ?? 0);
+      score += actorSign * materialValue(action.promotionType);
     if (destination)
       score += actorSign * squareQuality(destination.r, destination.c, actorPerspective) * 5;
     if (action.from && destination) {
@@ -1516,6 +1535,7 @@
       score += actorSign * lifeDeathGateMoveBonus(state, action, actorPerspective);
       score += actorSign * lifeDeathMoveActionValue(state, action, actorPerspective);
       score += lifeDeathTransferScore(state, action, color);
+      score += lifeDeathAnnihilationScore(state, action, color);
       score += actorSign * pathEffectScore(pathReport);
     }
     score += defensiveActionOrderingScore(state, action, color, context);
@@ -1546,6 +1566,7 @@
     let score = 0;
     if (action.kind === "attack") {
       score += captureTacticalBonus(actor, action);
+      score += intimidatedTargetTacticalBonus(action, color);
       score += shieldBreakTacticalBonus(after, actor, action, color);
       score += shieldTradeDiscipline(actor, action);
     }
@@ -1553,6 +1574,8 @@
       score += deathKillTacticalBonus(action, color);
     if (action.mode === "heal")
       score += healTacticalBonus(action, color);
+    score += lifeDeathTransferScore(before, action, color) * 0.85;
+    score += lifeDeathAnnihilationScore(before, action, color) * 0.9;
     score += defensiveRootScore(before, after, actor, action, color);
     score += teamSafetyDeltaScore(before, after, color);
     score -= postActionExposurePenalty(after, action, color);
@@ -1561,31 +1584,43 @@
   function captureTacticalBonus(actor, action) {
     if (action.kind !== "attack" || action.target?.hadShield || action.target?.type === PIECE_TYPES.KING)
       return 0;
-    const targetValue = MATERIAL_VALUES[action.target?.type] ?? 0;
-    const actorValue = MATERIAL_VALUES[actor?.type] ?? 0;
+    const targetValue = materialValue(action.target?.type);
+    const actorValue = materialValue(actor?.type);
     const favorableTrade = Math.max(0, targetValue - actorValue * 0.55);
-    return 150 + targetValue * 0.42 + favorableTrade * 0.34;
+    return 260 + targetValue * 0.92 + favorableTrade * 0.34;
+  }
+  function intimidatedTargetActionValue(action) {
+    const targetValue = targetActionValue(action);
+    const suppressedShield = action.target?.intimidationSuppressedShield ? shieldValueForType(action.target.type) : 0;
+    return 260 + targetValue * 0.38 + suppressedShield * 0.85;
+  }
+  function intimidatedTargetTacticalBonus(action, color) {
+    if (action.kind !== "attack" || !action.target?.isIntimidated)
+      return 0;
+    const sign = ownerFromSnapshot(action.target) === color ? -1 : 1;
+    const targetValue = targetActionValue(action);
+    const suppressedShield = action.target?.intimidationSuppressedShield ? shieldValueForType(action.target.type) : 0;
+    return sign * (360 + targetValue * 0.92 + suppressedShield * 1.1);
   }
   function shieldTradeDiscipline(actor, action) {
     if (!action.target?.hadShield || action.target?.type === PIECE_TYPES.KING)
       return 0;
-    const actorStake = (MATERIAL_VALUES[actor.type] ?? 0) + (actor.hasShield ? shieldValueForType(actor.type) : 0);
+    const actorStake = materialValue(actor.type) + (actor.hasShield ? shieldValueForType(actor.type) : 0);
     const shieldGain = shieldPressureValue(action.target);
     return -Math.max(0, actorStake - shieldGain * 3.1) * 0.18;
   }
   function shieldBreakTacticalBonus(after, actor, action, color) {
     if (!action.target?.hadShield || action.target?.type === PIECE_TYPES.KING)
       return 0;
-    const targetBase = MATERIAL_VALUES[action.target.type] ?? 0;
-    const actorBase = MATERIAL_VALUES[actor.type] ?? 0;
+    const targetBase = materialValue(action.target.type);
+    const actorBase = materialValue(actor.type);
     const targetShield = shieldPressureValue(action.target);
     const cheapness = Math.max(0, targetBase - actorBase * 0.6);
     const pawnLever = actor.type === PIECE_TYPES.PAWN ? 80 : 0;
     let bonus = 90 + targetShield * 1.45 + targetBase * 0.16 + cheapness * 0.55 + pawnLever;
     const targetAfter = findPieceById(after, action.targetId);
-    if (targetAfter && canBeHealedByOwner(after, targetAfter, oppositeColor(color))) {
-      bonus *= 0.48;
-    }
+    if (targetAfter)
+      bonus *= shieldRepairMultiplier(after, targetAfter, oppositeColor(color));
     return bonus;
   }
   function defensiveRootScore(before, after, actor, action, color) {
@@ -1673,7 +1708,7 @@
       deathLanding: Boolean(action.deathLanding),
       lifeCount: 0,
       deathCount: 0,
-      actorValue: actor ? MATERIAL_VALUES[actor.type] ?? 0 : 0,
+      actorValue: actor ? materialValue(actor.type) : 0,
       shieldValue: actor?.hasShield ? shieldValueForType(actor.type) : 0
     };
     if (!actor)
@@ -1787,7 +1822,7 @@
     return Math.min(score, 3600);
   }
   function shieldPressureValue(target) {
-    return 26 + shieldValueForType(target?.type) * 1.08 + (MATERIAL_VALUES[target?.type] ?? 0) * 0.1;
+    return 26 + shieldValueForType(target?.type) * 1.08 + materialValue(target?.type) * 0.1;
   }
   function controlScore(ownActions, enemyActions, color) {
     let score = 0;
@@ -1901,7 +1936,7 @@
         if (isProtectedFromDeathLike(state, target))
           continue;
         const sign = ownerOf(target) === color ? -1 : 1;
-        value += sign * (110 + (MATERIAL_VALUES[target.type] ?? 0) * 0.34 + (target.hasShield ? shieldValueForType(target.type) * 0.55 : 0));
+        value += sign * (110 + materialValue(target.type) * 0.34 + (target.hasShield ? shieldValueForType(target.type) * 0.55 : 0));
       }
     }
     return value;
@@ -1915,7 +1950,7 @@
           continue;
         }
         const sign = ownerOf(target) === color ? 1 : -0.75;
-        value += sign * (72 + shieldValueForType(target.type) * 0.95 + (MATERIAL_VALUES[target.type] ?? 0) * 0.08);
+        value += sign * (72 + shieldValueForType(target.type) * 0.95 + materialValue(target.type) * 0.08);
       }
     }
     return value;
@@ -1942,15 +1977,18 @@
     return pressure;
   }
   function targetActionValue(action) {
-    const base = MATERIAL_VALUES[action.target?.type] ?? 0;
+    const base = materialValue(action.target?.type);
     if (action.target?.type === PIECE_TYPES.KING)
       return 1e5;
     return base + (action.target?.hadShield ? shieldValueForType(action.target.type) : 0);
   }
+  function materialValue(type) {
+    return LIFE_DEATH_STRATEGIC_VALUES[type] ?? MATERIAL_VALUES[type] ?? 0;
+  }
   function pieceStake(piece) {
     if (!piece)
       return 0;
-    return (MATERIAL_VALUES[piece.type] ?? 0) + (piece.hasShield ? shieldValueForType(piece.type) : 0);
+    return materialValue(piece.type) + (piece.hasShield ? shieldValueForType(piece.type) : 0);
   }
   function attackActionValue(action) {
     const base = targetActionValue(action);
@@ -1970,15 +2008,17 @@
     return 0;
   }
   function healActionValue(state, action, color) {
-    const targetValue = MATERIAL_VALUES[action.target?.type] ?? 0;
+    const targetValue = materialValue(action.target?.type);
     const value = 150 + shieldValueForType(action.target?.type) * 2 + targetValue * 0.1;
     return ownerFromSnapshot(action.target) === color ? value : -value * 0.9;
   }
   function lifeDeathTransferScore(state, action, color) {
-    if (action.pieceType !== PIECE_TYPES.LIFE && action.pieceType !== PIECE_TYPES.DEATH)
+    if (!isLifeDeathType(action.pieceType))
       return 0;
     const actor = findPieceById(state, action.pieceId);
     if (!actor || !action.to)
+      return 0;
+    if (lifeDeathAnnihilationDoomed(state, action).length > 1)
       return 0;
     const beforeOwner = ownerOf(actor);
     const afterOwner = ownerAtRow(action.to.r);
@@ -1986,13 +2026,47 @@
       return 0;
     if (action.target?.type === PIECE_TYPES.KING && ownerFromSnapshot(action.target) !== beforeOwner)
       return 120000;
-    const specialValue = MATERIAL_VALUES[action.pieceType] ?? 0;
-    const handoffPenalty = specialValue * 6 + 900;
+    const specialValue = materialValue(action.pieceType);
+    const handoffPenalty = specialValue * (action.mode === "kill" ? 7.2 : 6.2) + (action.mode === "kill" ? 1300 : 900);
     if (beforeOwner === color && afterOwner !== color)
       return -handoffPenalty;
     if (beforeOwner !== color && afterOwner === color)
       return handoffPenalty;
     return 0;
+  }
+  function lifeDeathAnnihilationScore(state, action, color) {
+    const doomed = lifeDeathAnnihilationDoomed(state, action);
+    if (doomed.length <= 1 || action.target?.type === PIECE_TYPES.KING)
+      return 0;
+    let materialDelta = 0;
+    for (const piece of doomed) {
+      materialDelta += ownerOf(piece) === color ? -materialValue(piece.type) : materialValue(piece.type);
+    }
+    const actor = findPieceById(state, action.pieceId);
+    const actorValue = actor && ownerOf(actor) === color ? materialValue(actor.type) : 0;
+    const tradeFriction = actorValue > 0 ? Math.min(360, actorValue * 0.38) : 120;
+    return materialDelta - tradeFriction;
+  }
+  function lifeDeathAnnihilationDoomed(state, action) {
+    if (!isLifeDeathType(action.pieceType))
+      return [];
+    const actor = findPieceById(state, action.pieceId);
+    const destination = actionDestination(action);
+    if (!actor || !destination)
+      return [];
+    const doomed = new Map([[actor.id, actor]]);
+    for (const [dr, dc] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+      const neighbor = getPiece(state.board, destination.r + dr, destination.c + dc);
+      if (!neighbor || neighbor.id === actor.id || !isLifeDeathType(neighbor.type))
+        continue;
+      if (neighbor.type === action.pieceType)
+        continue;
+      doomed.set(neighbor.id, neighbor);
+    }
+    return [...doomed.values()];
+  }
+  function isLifeDeathType(type) {
+    return type === PIECE_TYPES.LIFE || type === PIECE_TYPES.DEATH;
   }
   function lifeDeathGateMoveBonus(state, action, color) {
     if (action.pieceType !== PIECE_TYPES.PAWN || action.mode !== "pawnAdvance")
@@ -2087,6 +2161,50 @@
     }
     return score;
   }
+  function lifeCountsByOwner(state) {
+    const counts = new Map([
+      [COLORS.WHITE, 0],
+      [COLORS.BLACK, 0]
+    ]);
+    for (const piece of allPieces(state)) {
+      if (piece.type !== PIECE_TYPES.LIFE)
+        continue;
+      counts.set(ownerOf(piece), (counts.get(ownerOf(piece)) ?? 0) + 1);
+    }
+    return counts;
+  }
+  function shieldRepairContextValue(piece, alliedLifeCount) {
+    if (alliedLifeCount <= 0 || !canHaveShield(piece.type) || !isLightSquare2(piece.row, piece.col) || piece.isIntimidated) {
+      return 0;
+    }
+    const typeWeight = piece.type === PIECE_TYPES.BISHOP ? 1.35 : piece.type === PIECE_TYPES.ROOK ? 1.1 : piece.type === PIECE_TYPES.PAWN ? 0.75 : 1;
+    const shieldNeedWeight = piece.hasShield ? 0.42 : 1;
+    return (18 + Math.min(2, alliedLifeCount) * 16 + shieldValueForType(piece.type) * 0.18) * typeWeight * shieldNeedWeight;
+  }
+  function shieldRepairMultiplier(state, target, targetOwner) {
+    if (!target || !canHaveShield(target.type) || target.hasShield || target.isImmune || target.isIntimidated || !isLightSquare2(target.row, target.col)) {
+      return 1;
+    }
+    if (canBeHealedByOwner(state, target, targetOwner))
+      return 0.48;
+    const alliedLifeCount = lifeCountForOwner(state, targetOwner);
+    if (alliedLifeCount <= 0)
+      return 1;
+    let multiplier = 0.88 - Math.min(2, alliedLifeCount) * 0.08;
+    if (target.type === PIECE_TYPES.BISHOP)
+      multiplier -= 0.08;
+    if (target.type === PIECE_TYPES.ROOK)
+      multiplier -= 0.04;
+    return Math.max(0.62, multiplier);
+  }
+  function lifeCountForOwner(state, color) {
+    let count = 0;
+    for (const piece of allPieces(state)) {
+      if (piece.type === PIECE_TYPES.LIFE && ownerOf(piece) === color)
+        count += 1;
+    }
+    return count;
+  }
   function canBeHealedByOwner(state, target, healerOwner) {
     if (!target || !canHaveShield(target.type) || target.hasShield || target.isImmune || target.isIntimidated || !isLightSquare2(target.row, target.col)) {
       return false;
@@ -2138,13 +2256,13 @@
   function actionExposureValue(action) {
     if (action.target?.type === PIECE_TYPES.KING)
       return 2200;
-    const base = MATERIAL_VALUES[action.target?.type] ?? 0;
+    const base = materialValue(action.target?.type);
     const shield = action.target?.hadShield ? shieldValueForType(action.target.type) : 0;
     if (action.mode === "kill")
       return base * 1.08 + shield + 130;
     if (action.kind === "attack") {
       if (action.target?.hadShield) {
-        const attackerBase = MATERIAL_VALUES[action.pieceType] ?? 0;
+        const attackerBase = materialValue(action.pieceType);
         const cheapAttackerLeverage = Math.max(0, base - attackerBase) * 0.28;
         const pawnLever = action.pieceType === PIECE_TYPES.PAWN ? 130 : 0;
         return shieldPressureValue(action.target) + cheapAttackerLeverage + pawnLever;
@@ -2302,34 +2420,38 @@
       }
     }
     renderStatus(state2, view) {
+      const statusState = view.statusState ?? state2;
       const playerTurnEl = this.statusPanelEl.querySelector("#player-turn");
       const previousPlayer = this.renderedPlayer;
+      const displayedPlayer = view.displayPlayer ?? statusState.currentPlayer;
       const playerSide = view.boardSide ?? COLORS.WHITE;
-      const keepFlash = previousPlayer === state2.currentPlayer && playerTurnEl.className.includes("turn-start-flash");
-      const shouldFlashTurn = previousPlayer && previousPlayer !== state2.currentPlayer && state2.currentPlayer === playerSide && !state2.gameOver;
-      playerTurnEl.textContent = playerName(state2.currentPlayer);
-      playerTurnEl.className = `player-turn ${state2.currentPlayer}${keepFlash ? " turn-start-flash" : ""}`;
+      const keepFlash = previousPlayer === displayedPlayer && playerTurnEl.className.includes("turn-start-flash");
+      const shouldFlashTurn = previousPlayer && previousPlayer !== displayedPlayer && displayedPlayer === playerSide && !statusState.gameOver;
+      playerTurnEl.textContent = playerName(displayedPlayer);
+      playerTurnEl.className = `player-turn ${displayedPlayer}${keepFlash ? " turn-start-flash" : ""}`;
       if (shouldFlashTurn) {
         restartClassAnimation(playerTurnEl, "turn-start-flash");
       }
-      this.renderedPlayer = state2.currentPlayer;
+      this.renderedPlayer = displayedPlayer;
       this.renderActionHistory(state2);
-      const legalActions = state2.gameOver ? [] : generateLegalActions(state2);
-      const standardStatus = state2.turn.standardMoveMade ? "Used" : legalActions.some((action) => action.consumes?.standard) ? "Available" : "Unavailable";
-      const specialStatus = state2.turn.specialMoveMade ? "Used" : legalActions.some((action) => action.consumes?.special) ? "Available" : "Unavailable";
+      const legalActions = statusState.gameOver ? [] : generateLegalActions(statusState);
+      const standardStatus = statusState.turn.standardMoveMade ? "Used" : legalActions.some((action) => action.consumes?.standard) ? "Available" : "Unavailable";
+      const specialStatus = statusState.turn.specialMoveMade ? "Used" : legalActions.some((action) => action.consumes?.special) ? "Available" : "Unavailable";
       setStatus(this.statusPanelEl.querySelector("#standard-move-status"), standardStatus);
       setStatus(this.statusPanelEl.querySelector("#special-move-status"), specialStatus);
       const info = this.statusPanelEl.querySelector("#phase-info");
       if (state2.gameOver) {
         info.textContent = state2.gameOver.winner ? `${playerName(state2.gameOver.winner)} wins: ${state2.gameOver.reason}.` : `Draw: ${state2.gameOver.reason}.`;
+      } else if (view.isAiAnimating) {
+        info.textContent = "Black AI is finishing its move...";
       } else if (view.isAiThinking) {
         info.textContent = "Black AI is thinking...";
       } else {
-        info.textContent = view.phaseInfo ?? `${playerName(state2.currentPlayer)} to move.`;
+        info.textContent = view.phaseInfo ?? `${playerName(statusState.currentPlayer)} to move.`;
       }
       const moveNumber = this.statusPanelEl.querySelector("#move-number");
       if (moveNumber)
-        moveNumber.textContent = String(state2.moveNumber);
+        moveNumber.textContent = String(statusState.moveNumber);
     }
     renderActionHistory(state2) {
       const history = this.statusPanelEl.querySelector("#action-history ol");
@@ -2513,8 +2635,12 @@
     }
     if (highlights.moves.has(key))
       classes.push("valid-move");
+    if (highlights.deathMoves?.has(key))
+      classes.push("valid-death-move");
     if (highlights.rampMoves?.has(key))
       classes.push("valid-ramp");
+    if (highlights.deathRampMoves?.has(key))
+      classes.push("valid-death-ramp");
     if (highlights.attacks.has(key))
       classes.push("valid-attack");
     if (highlights.specials.has(key))
@@ -2532,7 +2658,9 @@
   function emptyHighlights() {
     return {
       moves: new Set,
+      deathMoves: new Set,
       rampMoves: new Set,
+      deathRampMoves: new Set,
       attacks: new Set,
       specials: new Set,
       staging: new Set,
@@ -2655,6 +2783,12 @@
     removedPieceDurationMs: REMOVED_PIECE_DURATION
   } = ANIMATION_TIMING;
   var MOVE_EASING = "cubic-bezier(.18,.82,.22,1)";
+  var MOVE_EASING_X1 = 0.18;
+  var MOVE_EASING_Y1 = 0.82;
+  var MOVE_EASING_X2 = 0.22;
+  var MOVE_EASING_Y2 = 1;
+  var NORMAL_MOVE_FINAL_OFFSET = 0.82;
+  var MIN_PATH_EVENT_DELAY = 42;
   function moveAnimationDurationForAction(action = null) {
     const hopCount = action?.mode === "knightRamp" ? Math.max(1, action.rampSequence?.length ?? 1) : 1;
     if (action?.mode === "knightRamp" && hopCount > 1) {
@@ -2671,10 +2805,19 @@
     snapshot() {
       const pieces = new Map;
       const squares = new Map;
+      const squarePieces = new Map;
       for (const squareEl of this.boardEl.querySelectorAll?.(".square") ?? []) {
         if (typeof squareEl.getBoundingClientRect !== "function")
           continue;
-        squares.set(squareKey2(squareEl.dataset), squareEl.getBoundingClientRect());
+        const key = squareKey2(squareEl.dataset);
+        squares.set(key, squareEl.getBoundingClientRect());
+        const pieceEl = squareEl.querySelector?.("[data-piece-id]");
+        if (pieceEl) {
+          squarePieces.set(key, {
+            className: pieceEl.className,
+            textContent: pieceEl.textContent
+          });
+        }
       }
       for (const pieceEl of this.boardEl.querySelectorAll?.("[data-piece-id]") ?? []) {
         if (typeof pieceEl.getBoundingClientRect !== "function")
@@ -2687,7 +2830,7 @@
           square: squareEl ? { r: Number(squareEl.dataset.row), c: Number(squareEl.dataset.col) } : null
         });
       }
-      return { pieces, squares };
+      return { pieces, squares, squarePieces };
     }
     animate(previous, action, enabled) {
       if (!enabled || this.prefersReducedMotion)
@@ -2709,8 +2852,9 @@
         const dy = old.rect.top - newRect.top;
         if (Math.abs(dx) < 1 && Math.abs(dy) < 1)
           continue;
+        const shieldCleanup = action?.pieceId === pieceEl.dataset.pieceId ? this.preparePathShieldAnimation(pieceEl, old, action, previous) : null;
         if (action?.mode === "knightRamp" && action.pieceId === pieceEl.dataset.pieceId) {
-          if (this.animateKnightRamp(pieceEl, old, action, previous))
+          if (this.animateKnightRamp(pieceEl, old, action, previous, shieldCleanup))
             continue;
         }
         const squareEl = pieceEl.closest?.(".square");
@@ -2732,13 +2876,30 @@
           fill: "none"
         });
         const cleanup = () => {
+          shieldCleanup?.();
           pieceEl.classList.remove("is-moving");
           squareEl?.classList.remove("is-animating");
         };
         animation.finished?.then(cleanup, cleanup);
       }
     }
-    animateKnightRamp(pieceEl, old, action, previous) {
+    preparePathShieldAnimation(pieceEl, old, action, previous) {
+      const finalShielded = hasClass(pieceEl.className, "has-shield");
+      const plan = pathShieldTransitionPlan(action, old, previous, finalShielded);
+      if (!plan)
+        return null;
+      setShieldClass(pieceEl, plan.initialShielded);
+      const timers = plan.events.map((event) => globalThis.setTimeout?.(() => {
+        setShieldClass(pieceEl, event.shielded);
+        this.pulseSquare(event.square, event.effectClass);
+      }, event.time));
+      return () => {
+        for (const timer of timers)
+          globalThis.clearTimeout?.(timer);
+        setShieldClass(pieceEl, finalShielded);
+      };
+    }
+    animateKnightRamp(pieceEl, old, action, previous, shieldCleanup = null) {
       if (!Array.isArray(action.rampSequence) || action.rampSequence.length === 0) {
         return false;
       }
@@ -2753,7 +2914,7 @@
       const hopCount = routeRects.length;
       const points = [old.rect, ...routeRects];
       if (hopCount > 1) {
-        this.animateKnightRampSequence(pieceEl, squareEl, points, finalRect);
+        this.animateKnightRampSequence(pieceEl, squareEl, points, finalRect, shieldCleanup);
         return true;
       }
       squareEl?.classList.add("is-animating");
@@ -2764,19 +2925,21 @@
         fill: "none"
       });
       const cleanup = () => {
+        shieldCleanup?.();
         pieceEl.classList.remove("is-moving");
         squareEl?.classList.remove("is-animating");
       };
       animation.finished?.then(cleanup, cleanup);
       return true;
     }
-    animateKnightRampSequence(pieceEl, squareEl, points, finalRect) {
+    animateKnightRampSequence(pieceEl, squareEl, points, finalRect, shieldCleanup = null) {
       squareEl?.classList.add("is-animating");
       pieceEl.classList.add("is-moving");
       const animations = [];
       const cleanup = () => {
         for (const animation of animations)
           animation.cancel?.();
+        shieldCleanup?.();
         pieceEl.classList.remove("is-moving");
         squareEl?.classList.remove("is-animating");
       };
@@ -2920,7 +3083,8 @@
         id,
         { rect, className: "", textContent: "", square: null }
       ])) : new Map,
-      squares: new Map
+      squares: new Map,
+      squarePieces: new Map
     };
   }
   function squareKey2(dataset) {
@@ -2961,6 +3125,83 @@
   function transformForRect(rect, finalRect, scale) {
     return `translate(${rect.left - finalRect.left}px, ${rect.top - finalRect.top}px) scale(${scale})`;
   }
+  function pathShieldTransitionPlan(action, old, previous, finalShielded) {
+    if (!action?.path?.length || hasClass(old.className, "is-immune")) {
+      return null;
+    }
+    let shielded = hasClass(old.className, "has-shield");
+    const initialShielded = shielded;
+    const events = [];
+    for (let index = 0;index < action.path.length; index++) {
+      const square = action.path[index];
+      const occupant = previous.squarePieces?.get(squareKey2(square));
+      if (!occupant)
+        continue;
+      if (hasClass(occupant.className, "life-piece")) {
+        if (shielded || hasClass(old.className, "is-intimidated"))
+          continue;
+        shielded = true;
+        events.push({
+          square,
+          shielded,
+          effectClass: "life-glow",
+          time: pathEventTime(action, square, index)
+        });
+      }
+      if (hasClass(occupant.className, "death-piece")) {
+        if (!shielded)
+          continue;
+        shielded = false;
+        events.push({
+          square,
+          shielded,
+          effectClass: "death-move-glow",
+          time: pathEventTime(action, square, index)
+        });
+      }
+    }
+    if (events.length === 0 && initialShielded === finalShielded)
+      return null;
+    return { initialShielded, events };
+  }
+  function pathEventTime(action, square, pathIndex) {
+    if (action?.mode === "knightRamp" && Array.isArray(action.rampSequence)) {
+      const hopIndex = action.rampSequence.findIndex((step) => squareKey2(step.ramp) === squareKey2(square));
+      if (hopIndex >= 0) {
+        const hopDuration = action.rampSequence.length > 1 ? DOUBLE_RAMP_HOP_DURATION : MOVE_DURATION;
+        return Math.round(hopIndex * hopDuration + easedTimeForProgress(0.5, hopDuration));
+      }
+    }
+    const pathLength = Math.max(1, action.path?.length ?? 1);
+    const distanceProgress = (pathIndex + 1) / (pathLength + 1);
+    return Math.round(easedTimeForProgress(distanceProgress * NORMAL_MOVE_FINAL_OFFSET, MOVE_DURATION));
+  }
+  function easedTimeForProgress(progress, duration) {
+    const clamped = Math.max(0, Math.min(1, progress));
+    let low = 0;
+    let high = 1;
+    for (let i = 0;i < 18; i++) {
+      const middle = (low + high) / 2;
+      if (cubicBezier(middle, MOVE_EASING_Y1, MOVE_EASING_Y2) < clamped) {
+        low = middle;
+      } else {
+        high = middle;
+      }
+    }
+    const parameter = (low + high) / 2;
+    const timeProgress = cubicBezier(parameter, MOVE_EASING_X1, MOVE_EASING_X2);
+    return Math.max(MIN_PATH_EVENT_DELAY, timeProgress * duration);
+  }
+  function cubicBezier(t, p1, p2) {
+    const inv = 1 - t;
+    return 3 * inv * inv * t * p1 + 3 * inv * t * t * p2 + t * t * t;
+  }
+  function setShieldClass(pieceEl, shielded) {
+    pieceEl.classList?.toggle?.("has-shield", shielded);
+  }
+  function hasClass(className, needle) {
+    return ` ${className ?? ""} `.includes(` ${needle} `);
+  }
 
   // src/ui/settings.js
   var DEFAULT_SETTINGS = {
@@ -2973,9 +3214,9 @@
     0: { label: "Off (self-play)", maxDepth: 0, maxActions: 0, thinkDelay: 0 },
     1: { label: "Level 1", maxDepth: 1, maxActions: 14, maxTacticalActions: 4, quiescenceDepth: 0, tacticalWeight: 0.45, thinkDelay: 45, timeLimitMs: 100, hardTimeLimitMs: 160 },
     2: { label: "Level 2", maxDepth: 2, maxActions: 20, maxTacticalActions: 6, quiescenceDepth: 1, tacticalWeight: 0.75, thinkDelay: 35, timeLimitMs: 280, hardTimeLimitMs: 460 },
-    3: { label: "Level 3", maxDepth: 3, maxActions: 24, maxTacticalActions: 8, quiescenceDepth: 1, tacticalWeight: 1, thinkDelay: 30, timeLimitMs: 950, hardTimeLimitMs: 1650 },
-    4: { label: "Level 4", maxDepth: 4, maxActions: 20, maxTacticalActions: 7, quiescenceDepth: 1, tacticalWeight: 1.25, thinkDelay: 25, timeLimitMs: 1200, hardTimeLimitMs: 2000 },
-    5: { label: "Level 5", maxDepth: 5, maxActions: 30, maxTacticalActions: 12, quiescenceDepth: 2, tacticalWeight: 1.9, thinkDelay: 15, timeLimitMs: 2600, hardTimeLimitMs: 4200 }
+    3: { label: "Level 3", maxDepth: 3, maxActions: 26, maxTacticalActions: 8, quiescenceDepth: 1, tacticalWeight: 1.05, thinkDelay: 30, timeLimitMs: 950, hardTimeLimitMs: 1650 },
+    4: { label: "Level 4", maxDepth: 4, maxActions: 32, maxTacticalActions: 10, quiescenceDepth: 2, tacticalWeight: 1.35, thinkDelay: 25, timeLimitMs: 1200, hardTimeLimitMs: 2000 },
+    5: { label: "Level 5", maxDepth: 7, maxActions: 42, maxTacticalActions: 18, quiescenceDepth: 3, tacticalWeight: 2.35, thinkDelay: 15, timeLimitMs: 2600, hardTimeLimitMs: 4200 }
   };
   function loadSettings(storage = globalThis.localStorage) {
     if (!storage)
@@ -3188,7 +3429,7 @@
         selectedPiece: piece,
         selectedActions: actions,
         phaseInfo: `${piece.type} selected.`,
-        highlights: highlightsForActions(actions, piece)
+        highlights: highlightsForActions(this.state, actions, piece)
       };
       this.render();
     }
@@ -3345,9 +3586,16 @@
         const action = chooseAiAction(this.state, AI_COLOR, aiOptions);
         if (!action)
           break;
+        const statusState = this.state;
         const previous = this.animator.snapshot();
         this.state = applyAction(this.state, action);
-        this.view = { ...this.createEmptyView(), isAiThinking: this.state.currentPlayer === AI_COLOR };
+        const holdAiTurnStatus = !this.state.gameOver && this.state.currentPlayer !== AI_COLOR;
+        this.view = {
+          ...this.createEmptyView(),
+          isAiThinking: this.state.currentPlayer === AI_COLOR,
+          isAiAnimating: holdAiTurnStatus,
+          statusState: holdAiTurnStatus ? statusState : null
+        };
         this.render();
         this.animator.animate(previous, action, this.settings.animationsEnabled);
         await delay(this.animationDelay(action));
@@ -3380,13 +3628,24 @@
       return Math.max(ANIMATION_TIMING.turnAdvanceDelayMs, moveAnimationDurationForAction(action) + 60);
     }
   }
-  function highlightsForActions(actions, selectedPiece) {
+  function highlightsForActions(state2, actions, selectedPiece) {
     const highlights = emptyHighlights();
+    const moveActions = actions.filter((action) => action.kind === "move" && action.to);
+    const moveGroups = groupByDestination(moveActions.filter((action) => action.mode !== "knightRamp"));
+    const rampGroups = groupByDestination(moveActions.filter((action) => action.mode === "knightRamp"));
+    for (const [key, candidates] of moveGroups) {
+      if (candidates.every((action) => movePassesThroughDeath(state2, action)))
+        highlights.deathMoves.add(key);
+      else
+        highlights.moves.add(key);
+    }
+    for (const [key, candidates] of rampGroups) {
+      if (candidates.every((action) => movePassesThroughDeath(state2, action)))
+        highlights.deathRampMoves.add(key);
+      else
+        highlights.rampMoves.add(key);
+    }
     for (const action of actions) {
-      if (action.kind === "move" && action.mode === "knightRamp")
-        highlights.rampMoves.add(squareKey(action.to));
-      else if (action.kind === "move")
-        highlights.moves.add(squareKey(action.to));
       if (action.kind === "attack")
         highlights.attacks.add(squareKey(action.to));
       if (action.kind === "special")
@@ -3394,14 +3653,45 @@
     }
     highlights.moves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     highlights.rampMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
+    highlights.deathMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
+    highlights.deathRampMoves.delete(`${selectedPiece.row},${selectedPiece.col}`);
     return highlights;
   }
+  function groupByDestination(actions) {
+    const groups = new Map;
+    for (const action of actions) {
+      const key = squareKey(action.to);
+      groups.set(key, [...groups.get(key) ?? [], action]);
+    }
+    return groups;
+  }
+  function movePassesThroughDeath(state2, action) {
+    if (action.deathLanding)
+      return true;
+    return (action.path ?? []).some((square) => state2.board[square.r]?.[square.c]?.type === PIECE_TYPES.DEATH);
+  }
   function chooseKnightRampAction(candidates) {
-    const shortestLength = Math.min(...candidates.map((action) => action.rampSequence?.length ?? 1));
-    const shortest = candidates.filter((action) => (action.rampSequence?.length ?? 1) === shortestLength);
-    if (shortest.length === 1)
-      return shortest[0];
-    return shortest[Math.floor(Math.random() * shortest.length)];
+    const bestScore = Math.max(...candidates.map(knightRampRouteScore));
+    const bestRoutes = candidates.filter((action) => knightRampRouteScore(action) === bestScore);
+    const shortestLength = Math.min(...bestRoutes.map(knightRampRouteLength));
+    const preferred = bestRoutes.filter((action) => knightRampRouteLength(action) === shortestLength);
+    if (preferred.length === 1)
+      return preferred[0];
+    return preferred[Math.floor(Math.random() * preferred.length)];
+  }
+  function knightRampRouteLength(action) {
+    return action.rampSequence?.length ?? 1;
+  }
+  function knightRampRouteScore(action) {
+    let lifeCount = 0;
+    let deathCount = 0;
+    for (const step of action.rampSequence ?? []) {
+      if (step.rampType === PIECE_TYPES.LIFE)
+        lifeCount += 1;
+      if (step.rampType === PIECE_TYPES.DEATH)
+        deathCount += 1;
+    }
+    return lifeCount * 100 - deathCount * 1000;
   }
   function uniqueSquareKeys(squares) {
     return [...new Set(squares.filter(Boolean).map((square) => squareKey(square)))];

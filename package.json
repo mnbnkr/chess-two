@@ -12,6 +12,6 @@
     "check": "bun test && bun run bundle && bunx --bun vite build"
   },
   "devDependencies": {
-    "vite": "^8.0.0"
+    "vite": "^8.0.10"
   }
 }

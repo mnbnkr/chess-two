@@ -1,162 +1,212 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chess Two</title>
-    <link rel="preconnect"
-          href="https://fonts.googleapis.com">
-    <link rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&family=Merriweather:wght@400;700&display=swap"
-          rel="stylesheet">
-    <link rel="stylesheet"
-          href="style.css">
-</head>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&family=Merriweather:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
 
-<body>
+  <body>
     <div id="game-container">
-        <div id="ui-panel">
-            <h1>Chess Two</h1>
-            <div id="status-panel">
-                <div id="turn-status-container">
-                    <p>Move: <span id="move-number">1</span></p>
-                    <p>Turn: <span id="player-turn">White</span></p>
-                    <p>Standard Move: <span id="standard-move-status">Available</span></p>
-                    <p>Special Move: <span id="special-move-status">Available</span></p>
-                    <p>AI: <span id="ai-level-label">Level 3</span></p>
-                </div>
-                <div id="turn-controls"
-                     class="turn-controls">
-                    <button type="button"
-                            class="icon-button skip-button"
-                            data-control="skip-special"
-                            aria-label="Skip special move"
-                            hidden>Skip</button>
-                    <div class="rules-anchor">
-                        <button type="button"
-                                class="icon-button rules-button"
-                                data-control="rules"
-                                aria-label="Rules"
-                                aria-expanded="false"
-                                aria-controls="rules-panel">Rules</button>
-                        <div id="rules-panel"
-                             class="rules-panel"
-                             hidden>
-                            <h2>Rules</h2>
-                            <ul>
-                                <li>Pieces use shields: most survive one hit before they can be removed.</li>
-                                <li>Each turn has one standard move and one Life/Death move. Players may skip the
-                                    remaining Life/Death slot.</li>
-                                <li>Life heals shieldless pieces on adjacent light diagonal squares. Death can kill
-                                    adjacent dark-square targets unless they have an orthogonally adjacent ally.</li>
-                                <li>Life and Death are controlled by board half, can be passed through, and annihilate
-                                    each other orthogonally. Death-hit attacks still land before the attacker dies.</li>
-                                <li>Shield breaks use a staging square. Killing blows resolve on the destroyed piece's
-                                    square.</li>
-                                <li>Knights use L-shapes only to attack enemy pieces; non-attacking empty-square moves
-                                    must be ramp jumps, including Life and Death pass-through effects.</li>
-                                <li>A piece giving check becomes Intimidated, suppressing its shield while the check
-                                    continues.</li>
-                                <li>Pawns can advance up to three squares from home, use variant en passant as the
-                                    immediate standard reply, and promote on the far rank.</li>
-                                <li>Destroying a King ends the game immediately.</li>
-                                <li>Only Kings and Life pieces remaining is a draw.</li>
-                            </ul>
-                            <a class="rules-link"
-                               href="https://github.com/mnbnkr/chess-two/blob/main/RULES.md"
-                               target="_blank"
-                               rel="noopener noreferrer">Full rules</a>
-                        </div>
-                    </div>
-                    <div class="settings-anchor">
-                        <button type="button"
-                                class="icon-button"
-                                data-control="settings"
-                                aria-label="Settings"
-                                aria-expanded="false"
-                                aria-controls="settings-panel">⚙</button>
-                        <div id="settings-panel"
-                             class="settings-panel"
-                             hidden>
-                            <div class="setting-group">
-                                <div class="setting-heading">
-                                    <label for="ai-level">AI</label>
-                                    <span id="ai-setting-label">Level 3</span>
-                                </div>
-                                <input id="ai-level"
-                                       type="range"
-                                       min="0"
-                                       max="5"
-                                       step="1"
-                                       value="3">
-                                <p class="settings-hint">Set to 0 for self-play.</p>
-                            </div>
-                            <div class="setting-row setting-group">
-                                <span class="side-label">Side
-                                    <span id="side-lock-note"
-                                          class="info-capsule"
-                                          tabindex="0"
-                                          aria-label="Locked while AI is on"
-                                          data-tooltip="Locked while AI is on"
-                                          hidden>i</span>
-                                </span>
-                                <div class="segmented-control"
-                                     aria-label="Side">
-                                    <button type="button"
-                                            class="segmented-option"
-                                            data-side="white"
-                                            aria-pressed="true">White</button>
-                                    <button type="button"
-                                            class="segmented-option"
-                                            data-side="black"
-                                            aria-pressed="false">Black</button>
-                                </div>
-                            </div>
-                            <label class="toggle-row setting-group"
-                                   for="animations-enabled">
-                                <span>Animations</span>
-                                <input id="animations-enabled"
-                                       type="checkbox"
-                                       checked>
-                            </label>
-                            <button type="button"
-                                    class="new-game-button setting-group"
-                                    data-control="new-game">New Game</button>
-                        </div>
-                    </div>
-                </div>
-                <div id="info-box">
-                    <p id="phase-info">White's turn. Select a piece to begin.</p>
-                </div>
-                <div id="action-history"
-                     class="action-history"
-                     aria-live="polite">
-                    <p>Action History</p>
-                    <ol>
-                        <li>None yet</li>
-                    </ol>
-                </div>
+      <div id="ui-panel">
+        <h1>Chess Two</h1>
+        <div id="status-panel">
+          <div id="turn-status-container">
+            <p>Move: <span id="move-number">1</span></p>
+            <p>Turn: <span id="player-turn">White</span></p>
+            <p>
+              Standard Move: <span id="standard-move-status">Available</span>
+            </p>
+            <p>Special Move: <span id="special-move-status">Available</span></p>
+            <p>AI: <span id="ai-level-label">Level 3</span></p>
+          </div>
+          <div id="turn-controls" class="turn-controls">
+            <button
+              type="button"
+              class="icon-button skip-button"
+              data-control="skip-special"
+              aria-label="Skip special move"
+              hidden
+            >
+              Skip
+            </button>
+            <button
+              type="button"
+              class="icon-button undo-button"
+              data-control="undo-turn"
+              aria-label="Undo last turn"
+              disabled
+            >
+              Undo
+            </button>
+            <div class="rules-anchor">
+              <button
+                type="button"
+                class="icon-button rules-button"
+                data-control="rules"
+                aria-label="Rules"
+                aria-expanded="false"
+                aria-controls="rules-panel"
+              >
+                Rules
+              </button>
+              <div id="rules-panel" class="rules-panel" hidden>
+                <h2>Rules</h2>
+                <ul>
+                  <li>
+                    Pieces use shields: most survive one hit before they can be
+                    removed.
+                  </li>
+                  <li>
+                    Each turn has one standard move and one Life/Death move.
+                    Players may skip the remaining Life/Death slot.
+                  </li>
+                  <li>
+                    Life heals shieldless pieces on adjacent light diagonal
+                    squares. Death can kill adjacent dark-square targets unless
+                    they have an orthogonally adjacent ally.
+                  </li>
+                  <li>
+                    Life and Death are controlled by board half, can be passed
+                    through, and annihilate each other orthogonally. Death-hit
+                    attacks still land before the attacker dies.
+                  </li>
+                  <li>
+                    Shield breaks use a staging square. Killing blows resolve on
+                    the destroyed piece's square.
+                  </li>
+                  <li>
+                    Knights use L-shapes only to attack enemy pieces;
+                    non-attacking empty-square moves must be ramp jumps,
+                    including Life and Death pass-through effects.
+                  </li>
+                  <li>
+                    A piece giving check becomes Intimidated, suppressing its
+                    shield while the check continues.
+                  </li>
+                  <li>
+                    Pawns can advance up to three squares from home, use variant
+                    en passant as the immediate standard reply, and promote on
+                    the far rank.
+                  </li>
+                  <li>Destroying a King ends the game immediately.</li>
+                  <li>Only Kings and Life pieces remaining is a draw.</li>
+                </ul>
+                <a
+                  class="rules-link"
+                  href="https://github.com/mnbnkr/chess-two/blob/main/RULES.md"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >Full rules</a
+                >
+              </div>
             </div>
-        </div>
-        <div id="board-container">
-            <div id="board-frame">
-                <div id="game-board"></div>
-                <div id="promotion-panel"
-                     hidden></div>
+            <div class="settings-anchor">
+              <button
+                type="button"
+                class="icon-button"
+                data-control="settings"
+                aria-label="Settings"
+                aria-expanded="false"
+                aria-controls="settings-panel"
+              >
+                ⚙
+              </button>
+              <div id="settings-panel" class="settings-panel" hidden>
+                <div class="setting-group">
+                  <div class="setting-heading">
+                    <label for="ai-level">AI</label>
+                    <span id="ai-setting-label">Level 3</span>
+                  </div>
+                  <input
+                    id="ai-level"
+                    type="range"
+                    min="0"
+                    max="5"
+                    step="1"
+                    value="3"
+                  />
+                  <p class="settings-hint">Set to 0 for self-play.</p>
+                </div>
+                <div class="setting-row setting-group">
+                  <span class="side-label"
+                    >Side
+                    <span
+                      id="side-lock-note"
+                      class="info-capsule"
+                      tabindex="0"
+                      aria-label="Locked while AI is on"
+                      data-tooltip="Locked while AI is on"
+                      hidden
+                      >i</span
+                    >
+                  </span>
+                  <div class="segmented-control" aria-label="Side">
+                    <button
+                      type="button"
+                      class="segmented-option"
+                      data-side="white"
+                      aria-pressed="true"
+                    >
+                      White
+                    </button>
+                    <button
+                      type="button"
+                      class="segmented-option"
+                      data-side="black"
+                      aria-pressed="false"
+                    >
+                      Black
+                    </button>
+                  </div>
+                </div>
+                <label
+                  class="toggle-row setting-group"
+                  for="animations-enabled"
+                >
+                  <span>Animations</span>
+                  <input id="animations-enabled" type="checkbox" checked />
+                </label>
+                <button
+                  type="button"
+                  class="new-game-button setting-group"
+                  data-control="new-game"
+                >
+                  New Game
+                </button>
+              </div>
             </div>
-            <div id="file-coordinates"
-                 aria-hidden="true"></div>
+          </div>
+          <div id="info-box">
+            <p id="phase-info">White's turn. Select a piece to begin.</p>
+          </div>
+          <div id="action-history" class="action-history" aria-live="polite">
+            <p>Action History</p>
+            <ol>
+              <li>None yet</li>
+            </ol>
+          </div>
         </div>
+      </div>
+      <div id="board-container">
+        <div id="board-frame">
+          <div id="game-board"></div>
+          <div id="promotion-panel" hidden></div>
+        </div>
+        <div id="file-coordinates" aria-hidden="true"></div>
+      </div>
     </div>
     <script>
-        const chessTwoScript = document.createElement('script');
-        chessTwoScript.src = `chess-two.bundle.js?v=${Date.now()}`;
-        document.body.appendChild(chessTwoScript);
+      const chessTwoScript = document.createElement("script");
+      chessTwoScript.src = `chess-two.bundle.js?v=${Date.now()}`;
+      document.body.appendChild(chessTwoScript);
     </script>
-</body>
-
+  </body>
 </html>

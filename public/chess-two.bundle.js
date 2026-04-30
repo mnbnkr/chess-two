@@ -23,10 +23,7 @@
     PIECE_TYPES.QUEEN,
     PIECE_TYPES.KING
   ]);
-  var LIFE_DEATH_PIECES = new Set([
-    PIECE_TYPES.LIFE,
-    PIECE_TYPES.DEATH
-  ]);
+  var LIFE_DEATH_PIECES = new Set([PIECE_TYPES.LIFE, PIECE_TYPES.DEATH]);
   var SHIELDLESS_TYPES = new Set([
     PIECE_TYPES.KING,
     PIECE_TYPES.QUEEN,
@@ -229,7 +226,9 @@
       }));
     });
     for (let col = 0;col < BOARD_SIZE; col++) {
-      placePiece(board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 1, col, { id: `black-pawn-${col}` }));
+      placePiece(board, createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 1, col, {
+        id: `black-pawn-${col}`
+      }));
     }
     placePiece(board, createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 9, 0, { id: "white-life-a" }));
     placePiece(board, createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 9, 9, { id: "white-death-j" }));
@@ -239,7 +238,9 @@
       }));
     });
     for (let col = 0;col < BOARD_SIZE; col++) {
-      placePiece(board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 8, col, { id: `white-pawn-${col}` }));
+      placePiece(board, createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 8, col, {
+        id: `white-pawn-${col}`
+      }));
     }
     return {
       board,
@@ -253,9 +254,28 @@
     };
   }
   // src/engine/rules.js
-  var ROOK_DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-  var BISHOP_DIRS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
-  var KNIGHT_DELTAS = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
+  var ROOK_DIRS = [
+    [0, 1],
+    [0, -1],
+    [1, 0],
+    [-1, 0]
+  ];
+  var BISHOP_DIRS = [
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1]
+  ];
+  var KNIGHT_DELTAS = [
+    [-2, -1],
+    [-2, 1],
+    [-1, -2],
+    [-1, 2],
+    [1, -2],
+    [1, 2],
+    [2, -1],
+    [2, 1]
+  ];
   function createGameState() {
     const state = createInitialState();
     updateIntimidation(state);
@@ -580,7 +600,9 @@
     const firstVisited = new Set([squareKey(original)]);
     for (const first of singleJumps(original, firstVisited)) {
       const firstKey = squareKey(first.land);
-      pushRoute(first.land, [{ ramp: first.ramp, land: first.land, rampType: first.rampType }]);
+      pushRoute(first.land, [
+        { ramp: first.ramp, land: first.land, rampType: first.rampType }
+      ]);
       const secondVisited = new Set([squareKey(original), firstKey]);
       for (const second of singleJumps(first.land, secondVisited)) {
         pushRoute(second.land, [
@@ -810,17 +832,21 @@
       consumes: { standard: true, special: false }
     };
     if (isDeathStaging) {
-      return [withActionId({
-        ...base,
-        staging: { r: staging.r, c: staging.c }
-      })];
+      return [
+        withActionId({
+          ...base,
+          staging: { r: staging.r, c: staging.c }
+        })
+      ];
     }
     if (!isKillingBlow) {
-      return [withActionId({
-        ...base,
-        staging: { r: staging.r, c: staging.c },
-        rest: { r: staging.r, c: staging.c }
-      })];
+      return [
+        withActionId({
+          ...base,
+          staging: { r: staging.r, c: staging.c },
+          rest: { r: staging.r, c: staging.c }
+        })
+      ];
     }
     return promotionVariants(state, attacker, {
       ...base,
@@ -911,7 +937,14 @@
         pieceId: piece.id,
         pieceType: piece.type,
         targetId: target.id,
-        target: { id: target.id, type: target.type, color: target.color, r: target.row, c: target.col, hadShield: target.hasShield },
+        target: {
+          id: target.id,
+          type: target.type,
+          color: target.color,
+          r: target.row,
+          c: target.col,
+          hadShield: target.hasShield
+        },
         from: { r: piece.row, c: piece.col },
         to: { r: target.row, c: target.col },
         consumes: { standard: true, special: true }
@@ -935,7 +968,14 @@
         pieceId: piece.id,
         pieceType: piece.type,
         targetId: target.id,
-        target: { id: target.id, type: target.type, color: target.color, r: target.row, c: target.col, hadShield: target.hasShield },
+        target: {
+          id: target.id,
+          type: target.type,
+          color: target.color,
+          r: target.row,
+          c: target.col,
+          hadShield: target.hasShield
+        },
         from: { r: piece.row, c: piece.col },
         to: { r: target.row, c: target.col },
         consumes: { standard: true, special: true }
@@ -1083,7 +1123,10 @@
       state.turn.specialMoveMade = true;
   }
   function recordAction(state, action) {
-    state.actionHistory = [...state.actionHistory ?? [], structuredClone(action)];
+    state.actionHistory = [
+      ...state.actionHistory ?? [],
+      structuredClone(action)
+    ];
   }
   function updateEnPassant(state, action, previousEnPassant, actorColor) {
     if (action.enPassantOpportunity) {
@@ -1109,7 +1152,10 @@
     while (!state.gameOver && generateLegalActions(state).length === 0) {
       skipped += 1;
       if (skipped > 1) {
-        state.gameOver = { winner: null, reason: "No legal moves for either player" };
+        state.gameOver = {
+          winner: null,
+          reason: "No legal moves for either player"
+        };
         break;
       }
       switchTurn(state);
@@ -1167,7 +1213,10 @@
       return;
     const hasDestructionMaterial = pieces.some((piece) => piece.type !== PIECE_TYPES.KING && piece.type !== PIECE_TYPES.LIFE);
     if (!hasDestructionMaterial) {
-      state.gameOver = { winner: null, reason: "Only kings and Life pieces remain" };
+      state.gameOver = {
+        winner: null,
+        reason: "Only kings and Life pieces remain"
+      };
     }
   }
   function updateIntimidation(state) {
@@ -1341,7 +1390,11 @@
       }
       alpha = Math.max(alpha, bestScore);
     }
-    return { action: bestAction, score: bestScore, completed: !settings.timedOut };
+    return {
+      action: bestAction,
+      score: bestScore,
+      completed: !settings.timedOut
+    };
   }
   function minimax(state, depth, alpha, beta, aiColor, settings) {
     if (state.gameOver)
@@ -1456,7 +1509,9 @@
     const enemy = oppositeColor(color);
     const currentActions = generateLegalActions(state, state.currentPlayer);
     const ownActions = generateLegalActions(state, color, { respectTurn: false });
-    const enemyActions = generateLegalActions(state, enemy, { respectTurn: false });
+    const enemyActions = generateLegalActions(state, enemy, {
+      respectTurn: false
+    });
     score += (state.currentPlayer === color ? 1 : -1) * Math.min(currentActions.length, 20) * 2;
     score += threatPressure(ownActions, enemyActions);
     score += controlScore(ownActions, enemyActions, color);
@@ -1469,12 +1524,16 @@
   }
   function orderAiActions(state, actions, color, settings, context = buildActionContext(state)) {
     const direction = state.currentPlayer === color ? 1 : -1;
-    const scores = new Map(actions.map((action) => [action.id, actionHeuristic(state, action, color, settings, context)]));
+    const scores = new Map(actions.map((action) => [
+      action.id,
+      actionHeuristic(state, action, color, settings, context)
+    ]));
     return [...actions].sort((a, b) => direction * (scores.get(b.id) - scores.get(a.id)) || a.id.localeCompare(b.id));
   }
   function selectSearchActions(state, actions, color, settings) {
     const context = buildActionContext(state);
-    const ordered = orderAiActions(state, sortActions(actions), color, settings, context);
+    const disciplinedActions = actions.filter((action) => !isBadFatalShieldBreak(state, action));
+    const ordered = orderAiActions(state, sortActions(disciplinedActions.length > 0 ? disciplinedActions : actions), color, settings, context);
     const selected = ordered.slice(0, settings.maxActions);
     const selectedIds = new Set(selected.map((action) => action.id));
     for (const action of ordered) {
@@ -1484,6 +1543,15 @@
       selectedIds.add(action.id);
     }
     return selected;
+  }
+  function isBadFatalShieldBreak(state, action) {
+    if (action.kind !== "attack" || !action.target?.hadShield || action.target?.type === PIECE_TYPES.KING) {
+      return false;
+    }
+    const actor = findPieceById(state, action.pieceId);
+    if (!actor || !pathEffectReport(state, action).diesAfterAction)
+      return false;
+    return pieceStake(actor) > shieldPressureValue(action.target) * 1.4;
   }
   function compareAiActions(state, a, b, color) {
     return actionHeuristic(state, b, color) - actionHeuristic(state, a, color) || a.id.localeCompare(b.id);
@@ -1578,6 +1646,7 @@
     score += lifeDeathAnnihilationScore(before, action, color) * 0.9;
     score += defensiveRootScore(before, after, actor, action, color);
     score += teamSafetyDeltaScore(before, after, color);
+    score -= selfDestructionPenalty(after, actor, action, color);
     score -= postActionExposurePenalty(after, action, color);
     return score * (settings.tacticalWeight ?? 1);
   }
@@ -1648,12 +1717,32 @@
     const urgentDelta = beforeExposure.urgent - afterExposure.urgent;
     return totalDelta * 0.18 + urgentDelta * 0.72;
   }
+  function selfDestructionPenalty(after, actor, action, color) {
+    if (!actor || ownerOf(actor) !== color)
+      return 0;
+    if (after.gameOver?.winner === color || action.target?.type === PIECE_TYPES.KING)
+      return 0;
+    if (findPieceById(after, action.pieceId))
+      return 0;
+    const stake = pieceStake(actor);
+    let penalty = 420 + stake * 1.55;
+    if (action.deathStaging || action.deathLanding)
+      penalty += 680;
+    if (action.kind === "attack" && action.target?.hadShield) {
+      penalty += 980 + stake * 0.35;
+    }
+    const immediateGain = action.kind === "attack" && action.target ? action.target.hadShield ? shieldPressureValue(action.target) : targetActionValue(action) : 0;
+    penalty -= Math.min(immediateGain * 0.35, stake * 0.5);
+    return Math.max(0, penalty);
+  }
   function postActionExposurePenalty(state, action, color) {
     const actor = findPieceById(state, action.pieceId);
     if (!actor || ownerOf(actor) !== color || state.gameOver)
       return 0;
     let worstReply = 0;
-    for (const reply of generateLegalActions(state, oppositeColor(color), { respectTurn: false })) {
+    for (const reply of generateLegalActions(state, oppositeColor(color), {
+      respectTurn: false
+    })) {
       if (reply.targetId !== actor.id)
         continue;
       worstReply = Math.max(worstReply, actionExposureValue(reply));
@@ -1661,7 +1750,7 @@
     if (worstReply <= 0)
       return 0;
     const immediateGain = action.kind === "attack" ? action.target?.hadShield ? shieldPressureValue(action.target) : targetActionValue(action) : 0;
-    const exposureWeight = immediateGain >= worstReply ? 0.35 : 0.85;
+    const exposureWeight = immediateGain >= worstReply ? 0.35 : action.target?.hadShield ? 1.1 : 0.85;
     return worstReply * exposureWeight;
   }
   function isForcingAction(action) {
@@ -1956,7 +2045,12 @@
     return value;
   }
   function isProtectedFromDeathLike(state, target) {
-    for (const [dr, dc] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+    for (const [dr, dc] of [
+      [0, 1],
+      [0, -1],
+      [1, 0],
+      [-1, 0]
+    ]) {
       const protector = getPiece(state.board, target.row + dr, target.col + dc);
       if (protector && ownerOf(protector) === ownerOf(target))
         return true;
@@ -2055,7 +2149,12 @@
     if (!actor || !destination)
       return [];
     const doomed = new Map([[actor.id, actor]]);
-    for (const [dr, dc] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+    for (const [dr, dc] of [
+      [0, 1],
+      [0, -1],
+      [1, 0],
+      [-1, 0]
+    ]) {
       const neighbor = getPiece(state.board, destination.r + dr, destination.c + dc);
       if (!neighbor || neighbor.id === actor.id || !isLifeDeathType(neighbor.type))
         continue;
@@ -2368,8 +2467,32 @@
     return globalThis.performance?.now?.() ?? Date.now();
   }
   // src/ui/renderer.js
+  var PIECE_ASSET_BASE = "assets/pieces/";
+  var PIECE_ASSET_CODES = {
+    [PIECE_TYPES.KING]: "K",
+    [PIECE_TYPES.QUEEN]: "Q",
+    [PIECE_TYPES.ROOK]: "R",
+    [PIECE_TYPES.BISHOP]: "B",
+    [PIECE_TYPES.KNIGHT]: "N",
+    [PIECE_TYPES.PAWN]: "P"
+  };
+  var PERMANENTLY_FLIPPED_PIECE_IDS = new Set([
+    "black-knight-2",
+    "black-bishop-3",
+    "white-knight-2",
+    "white-bishop-3"
+  ]);
+
   class Renderer {
-    constructor({ boardEl, coordinateEl, statusPanelEl, promotionEl, controlsEl, settingsEl, rulesEl }) {
+    constructor({
+      boardEl,
+      coordinateEl,
+      statusPanelEl,
+      promotionEl,
+      controlsEl,
+      settingsEl,
+      rulesEl
+    }) {
       this.boardEl = boardEl;
       this.coordinateEl = coordinateEl;
       this.statusPanelEl = statusPanelEl;
@@ -2547,11 +2670,16 @@
       if (!this.controlsEl)
         return;
       const skip = this.controlsEl.querySelector('[data-control="skip-special"]');
+      const undo = this.controlsEl.querySelector('[data-control="undo-turn"]');
       const settings = this.controlsEl.querySelector('[data-control="settings"]');
       const rules2 = this.controlsEl.querySelector('[data-control="rules"]');
       if (skip) {
         skip.hidden = !view.canSkipSpecial;
         skip.disabled = !view.canSkipSpecial;
+      }
+      if (undo) {
+        undo.disabled = !view.canUndo;
+        undo.setAttribute("aria-disabled", view.canUndo ? "false" : "true");
       }
       if (settings) {
         settings.setAttribute("aria-expanded", view.settingsOpen ? "true" : "false");
@@ -2596,10 +2724,32 @@
   }
   function renderPiece(piece, state2) {
     const pieceEl = document.createElement("span");
-    pieceEl.className = `piece ${piece.color}`;
+    pieceEl.className = `piece ${piece.color} ${pieceAssetClass(piece)}`;
     pieceEl.dataset.pieceId = piece.id;
-    pieceEl.textContent = symbolFor(piece);
+    pieceEl.setAttribute("aria-label", `${piece.color} ${piece.type}`);
+    const pieceImage = document.createElement("img");
+    pieceImage.className = "piece-image";
+    pieceImage.src = pieceAssetPath(piece);
+    pieceImage.alt = "";
+    pieceImage.decoding = "async";
+    pieceImage.draggable = false;
+    const fallbackSymbol = document.createElement("span");
+    fallbackSymbol.className = "piece-symbol";
+    fallbackSymbol.textContent = symbolFor(piece);
+    fallbackSymbol.hidden = true;
+    pieceImage.addEventListener("error", () => {
+      pieceImage.hidden = true;
+      fallbackSymbol.hidden = false;
+    });
+    const statusOverlay = document.createElement("span");
+    statusOverlay.className = "piece-status-overlay";
+    statusOverlay.setAttribute("aria-hidden", "true");
+    pieceEl.appendChild(pieceImage);
+    pieceEl.appendChild(fallbackSymbol);
+    pieceEl.appendChild(statusOverlay);
     const titleParts = [`${piece.color} ${piece.type}`];
+    if (shouldFlipPieceImage(piece))
+      pieceEl.classList.add("is-flipped");
     if (piece.hasShield)
       pieceEl.classList.add("has-shield");
     if (piece.isImmune) {
@@ -2625,6 +2775,25 @@
     }
     pieceEl.title = titleParts.join(" - ");
     return pieceEl;
+  }
+  function pieceAssetPath(piece) {
+    return `${PIECE_ASSET_BASE}${pieceAssetName(piece)}`;
+  }
+  function pieceAssetClass(piece) {
+    return `piece-asset-${pieceAssetName(piece).replace(".webp", "")}`;
+  }
+  function pieceAssetName(piece) {
+    if (piece.type === PIECE_TYPES.LIFE)
+      return "wbL.webp";
+    if (piece.type === PIECE_TYPES.DEATH)
+      return "wbD.webp";
+    const colorPrefix = piece.color === COLORS.WHITE ? "w" : "b";
+    return `${colorPrefix}${PIECE_ASSET_CODES[piece.type]}.webp`;
+  }
+  function shouldFlipPieceImage(piece) {
+    if (PERMANENTLY_FLIPPED_PIECE_IDS.has(piece.id))
+      return true;
+    return LIFE_DEATH_PIECES.has(piece.type) && ownerOf(piece) === COLORS.BLACK;
   }
   function markerForSquare(row, col, view, highlights) {
     const classes = [];
@@ -2791,9 +2960,8 @@
   var MIN_PATH_EVENT_DELAY = 42;
   function moveAnimationDurationForAction(action = null) {
     const hopCount = action?.mode === "knightRamp" ? Math.max(1, action.rampSequence?.length ?? 1) : 1;
-    if (action?.mode === "knightRamp" && hopCount > 1) {
+    if (action?.mode === "knightRamp")
       return DOUBLE_RAMP_HOP_DURATION * hopCount;
-    }
     return MOVE_DURATION;
   }
 
@@ -2827,6 +2995,7 @@
           rect: pieceEl.getBoundingClientRect(),
           className: pieceEl.className,
           textContent: pieceEl.textContent,
+          html: pieceEl.innerHTML ?? "",
           square: squareEl ? { r: Number(squareEl.dataset.row), c: Number(squareEl.dataset.col) } : null
         });
       }
@@ -2837,7 +3006,7 @@
         return;
       const snapshot = normalizeSnapshot(previous);
       this.animateMovement(snapshot, action);
-      this.animateRemovedPieces(snapshot);
+      this.animateRemovedPieces(snapshot, action);
       this.animateEffects(action);
     }
     animateMovement(previous, action = null) {
@@ -2853,8 +3022,9 @@
         if (Math.abs(dx) < 1 && Math.abs(dy) < 1)
           continue;
         const shieldCleanup = action?.pieceId === pieceEl.dataset.pieceId ? this.preparePathShieldAnimation(pieceEl, old, action, previous) : null;
+        const landingStatusCleanup = action?.pieceId === pieceEl.dataset.pieceId ? this.prepareLandingStatusAnimation(pieceEl, old, action, landingStatusDelayForAction(action)) : null;
         if (action?.mode === "knightRamp" && action.pieceId === pieceEl.dataset.pieceId) {
-          if (this.animateKnightRamp(pieceEl, old, action, previous, shieldCleanup))
+          if (this.animateKnightRamp(pieceEl, old, action, previous, composeCleanups(shieldCleanup, landingStatusCleanup)))
             continue;
         }
         const squareEl = pieceEl.closest?.(".square");
@@ -2877,6 +3047,7 @@
         });
         const cleanup = () => {
           shieldCleanup?.();
+          landingStatusCleanup?.();
           pieceEl.classList.remove("is-moving");
           squareEl?.classList.remove("is-animating");
         };
@@ -2897,6 +3068,31 @@
         for (const timer of timers)
           globalThis.clearTimeout?.(timer);
         setShieldClass(pieceEl, finalShielded);
+      };
+    }
+    prepareLandingStatusAnimation(pieceEl, old, action, landingDelay) {
+      const finalClassName = pieceEl.className;
+      const gainedIntimidation = hasClass(finalClassName, "is-intimidated") && !hasClass(old.className, "is-intimidated");
+      if (!gainedIntimidation)
+        return null;
+      pieceEl.classList.remove("is-intimidated", "intimidation-framed");
+      if (canHaveShield(action?.pieceType) && hasClass(old.className, "has-shield") && !hasClass(finalClassName, "has-shield")) {
+        pieceEl.classList.add("has-shield");
+      }
+      let applied = false;
+      const timer = globalThis.setTimeout?.(() => {
+        applied = true;
+        applyLandingClassName(pieceEl, finalClassName);
+        this.pulseSquare(action.rest ?? action.to, "intimidation-glow");
+      }, landingDelay);
+      return () => {
+        if (timer)
+          globalThis.clearTimeout?.(timer);
+        if (applied)
+          return;
+        applied = true;
+        pieceEl.className = finalClassName;
+        this.pulseSquare(action.rest ?? action.to, "intimidation-glow");
       };
     }
     animateKnightRamp(pieceEl, old, action, previous, shieldCleanup = null) {
@@ -2979,7 +3175,7 @@
         easing: "cubic-bezier(.2,.8,.22,1)"
       });
     }
-    animateRemovedPieces(previous) {
+    animateRemovedPieces(previous, action = null) {
       const currentPieces = [
         ...this.boardEl.querySelectorAll?.("[data-piece-id]") ?? []
       ];
@@ -2990,9 +3186,12 @@
       for (const [id, old] of previous.pieces) {
         if (currentIds.has(id))
           continue;
+        if (id === action?.pieceId && this.animateRemovedMovingPiece(previous, old, action, boardRect)) {
+          continue;
+        }
         const ghost = globalThis.document.createElement("span");
         ghost.className = `piece-ghost ${old.className}`;
-        ghost.textContent = old.textContent;
+        setGhostContent(ghost, old);
         ghost.style.left = `${old.rect.left - boardRect.left}px`;
         ghost.style.top = `${old.rect.top - boardRect.top}px`;
         ghost.style.width = `${old.rect.width}px`;
@@ -3034,6 +3233,38 @@
         if (old.square)
           this.pulseSquare(old.square, "death-burst");
       }
+    }
+    animateRemovedMovingPiece(previous, old, action, boardRect) {
+      const plan = removedMovingPiecePlan(action, old, previous);
+      if (!plan || !globalThis.document)
+        return false;
+      const ghost = globalThis.document.createElement("span");
+      ghost.className = `piece-ghost ${old.className} is-moving-removal`;
+      setGhostContent(ghost, old);
+      ghost.style.left = `${old.rect.left - boardRect.left}px`;
+      ghost.style.top = `${old.rect.top - boardRect.top}px`;
+      ghost.style.width = `${old.rect.width}px`;
+      ghost.style.height = `${old.rect.height}px`;
+      this.boardEl.appendChild(ghost);
+      const pulseTimer = globalThis.setTimeout?.(() => {
+        this.pulseSquare(plan.fadeSquare, "death-move-glow");
+      }, plan.fadeTime);
+      const animation = ghost.animate?.(removedMovingPieceKeyframes(old.rect, plan), {
+        duration: plan.duration,
+        easing: MOVE_EASING,
+        fill: "forwards"
+      });
+      const cleanup = () => {
+        if (pulseTimer)
+          globalThis.clearTimeout?.(pulseTimer);
+        ghost.remove();
+      };
+      if (animation?.finished) {
+        animation.finished.then(cleanup, cleanup);
+      } else {
+        globalThis.setTimeout?.(cleanup, plan.duration + 80);
+      }
+      return true;
     }
     animateEffects(action) {
       if (!action)
@@ -3125,12 +3356,36 @@
   function transformForRect(rect, finalRect, scale) {
     return `translate(${rect.left - finalRect.left}px, ${rect.top - finalRect.top}px) scale(${scale})`;
   }
+  function landingStatusDelayForAction(action) {
+    if (action?.mode === "knightRamp" && Array.isArray(action.rampSequence)) {
+      const hopCount = Math.max(1, action.rampSequence.length);
+      const hopDuration = DOUBLE_RAMP_HOP_DURATION;
+      if (hopCount > 1)
+        return hopCount * hopDuration;
+      return Math.round(easedTimeForProgress(NORMAL_MOVE_FINAL_OFFSET, hopDuration));
+    }
+    return Math.round(easedTimeForProgress(NORMAL_MOVE_FINAL_OFFSET, moveAnimationDurationForAction(action)));
+  }
+  function setGhostContent(ghost, old) {
+    if (old.html) {
+      ghost.innerHTML = old.html;
+      return;
+    }
+    ghost.textContent = old.textContent;
+  }
+  function applyLandingClassName(pieceEl, finalClassName) {
+    const wasMoving = hasClass(pieceEl.className, "is-moving");
+    pieceEl.className = finalClassName;
+    if (wasMoving)
+      pieceEl.classList.add("is-moving");
+  }
   function pathShieldTransitionPlan(action, old, previous, finalShielded) {
     if (!action?.path?.length || hasClass(old.className, "is-immune")) {
       return null;
     }
     let shielded = hasClass(old.className, "has-shield");
     const initialShielded = shielded;
+    const shieldEligible = canHaveShield(action?.pieceType);
     const events = [];
     for (let index = 0;index < action.path.length; index++) {
       const square = action.path[index];
@@ -3138,7 +3393,7 @@
       if (!occupant)
         continue;
       if (hasClass(occupant.className, "life-piece")) {
-        if (shielded || hasClass(old.className, "is-intimidated"))
+        if (!shieldEligible || shielded || hasClass(old.className, "is-intimidated"))
           continue;
         shielded = true;
         events.push({
@@ -3163,6 +3418,95 @@
     if (events.length === 0 && initialShielded === finalShielded)
       return null;
     return { initialShielded, events };
+  }
+  function removedMovingPiecePlan(action, old, previous) {
+    if (!action || !old?.rect)
+      return null;
+    const path = action.path ?? [];
+    const shieldEligible = canHaveShield(action.pieceType);
+    const immune = hasClass(old.className, "is-immune");
+    const intimidated = hasClass(old.className, "is-intimidated");
+    let shielded = hasClass(old.className, "has-shield");
+    let fadeSquare = null;
+    let fadePathIndex = -1;
+    if (!immune) {
+      for (let index = 0;index < path.length; index++) {
+        const square = path[index];
+        const occupant = previous.squarePieces?.get(squareKey2(square));
+        if (!occupant)
+          continue;
+        if (hasClass(occupant.className, "life-piece") && shieldEligible && !shielded && !intimidated) {
+          shielded = true;
+        }
+        if (hasClass(occupant.className, "death-piece")) {
+          if (shielded) {
+            shielded = false;
+          } else {
+            fadeSquare = square;
+            fadePathIndex = index;
+            break;
+          }
+        }
+      }
+    }
+    if (action.deathStaging) {
+      fadeSquare = action.staging;
+      fadePathIndex = -1;
+    }
+    if (action.deathLanding) {
+      fadeSquare = action.to;
+      fadePathIndex = -1;
+    }
+    if (!fadeSquare)
+      return null;
+    const destination = action.kind === "attack" && !action.deathStaging ? action.rest ?? action.to ?? fadeSquare : fadeSquare;
+    const destinationRect = previous.squares?.get(squareKey2(destination)) ?? previous.squares?.get(squareKey2(fadeSquare));
+    const fadeRect = previous.squares?.get(squareKey2(fadeSquare));
+    if (!destinationRect || !fadeRect)
+      return null;
+    const duration = moveAnimationDurationForAction(action);
+    const fadeTime = fadePathIndex >= 0 ? Math.min(duration - MIN_PATH_EVENT_DELAY, pathEventTime(action, fadeSquare, fadePathIndex)) : Math.round(duration * NORMAL_MOVE_FINAL_OFFSET);
+    const fadeOffset = Math.max(0.08, Math.min(0.92, fadeTime / duration));
+    return {
+      destinationRect,
+      duration,
+      fadeOffset,
+      fadeRect,
+      fadeSquare,
+      fadeTime
+    };
+  }
+  function removedMovingPieceKeyframes(fromRect, plan) {
+    const beforeFadeOffset = Math.max(0, plan.fadeOffset - 0.04);
+    return [
+      {
+        offset: 0,
+        opacity: 1,
+        transform: "translate(0px, 0px) scale(1.05)",
+        filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48)) blur(0)"
+      },
+      {
+        offset: beforeFadeOffset,
+        opacity: 1,
+        transform: transformFromOrigin(fromRect, plan.fadeRect, 1.02),
+        filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.46)) blur(0)"
+      },
+      {
+        offset: plan.fadeOffset,
+        opacity: 0.76,
+        transform: transformFromOrigin(fromRect, plan.fadeRect, 0.96),
+        filter: "drop-shadow(0 10px 14px rgba(0,0,0,0.44)) blur(0.4px) saturate(0.82)"
+      },
+      {
+        offset: 1,
+        opacity: 0,
+        transform: `${transformFromOrigin(fromRect, plan.destinationRect, 0.42)} rotate(7deg)`,
+        filter: "blur(4px) saturate(0.45)"
+      }
+    ];
+  }
+  function transformFromOrigin(fromRect, toRect, scale) {
+    return `translate(${toRect.left - fromRect.left}px, ${toRect.top - fromRect.top}px) scale(${scale})`;
   }
   function pathEventTime(action, square, pathIndex) {
     if (action?.mode === "knightRamp" && Array.isArray(action.rampSequence)) {
@@ -3202,6 +3546,15 @@
   function hasClass(className, needle) {
     return ` ${className ?? ""} `.includes(` ${needle} `);
   }
+  function composeCleanups(...cleanups) {
+    const active = cleanups.filter(Boolean);
+    if (active.length === 0)
+      return null;
+    return () => {
+      for (const cleanup of active)
+        cleanup();
+    };
+  }
 
   // src/ui/settings.js
   var DEFAULT_SETTINGS = {
@@ -3212,11 +3565,61 @@
   var STORAGE_KEY = "chess-two-settings";
   var AI_LEVELS = {
     0: { label: "Off (self-play)", maxDepth: 0, maxActions: 0, thinkDelay: 0 },
-    1: { label: "Level 1", maxDepth: 1, maxActions: 14, maxTacticalActions: 4, quiescenceDepth: 0, tacticalWeight: 0.45, thinkDelay: 45, timeLimitMs: 100, hardTimeLimitMs: 160 },
-    2: { label: "Level 2", maxDepth: 2, maxActions: 20, maxTacticalActions: 6, quiescenceDepth: 1, tacticalWeight: 0.75, thinkDelay: 35, timeLimitMs: 280, hardTimeLimitMs: 460 },
-    3: { label: "Level 3", maxDepth: 3, maxActions: 26, maxTacticalActions: 8, quiescenceDepth: 1, tacticalWeight: 1.05, thinkDelay: 30, timeLimitMs: 950, hardTimeLimitMs: 1650 },
-    4: { label: "Level 4", maxDepth: 4, maxActions: 32, maxTacticalActions: 10, quiescenceDepth: 2, tacticalWeight: 1.35, thinkDelay: 25, timeLimitMs: 1200, hardTimeLimitMs: 2000 },
-    5: { label: "Level 5", maxDepth: 7, maxActions: 42, maxTacticalActions: 18, quiescenceDepth: 3, tacticalWeight: 2.35, thinkDelay: 15, timeLimitMs: 2600, hardTimeLimitMs: 4200 }
+    1: {
+      label: "Level 1",
+      maxDepth: 1,
+      maxActions: 14,
+      maxTacticalActions: 4,
+      quiescenceDepth: 0,
+      tacticalWeight: 0.45,
+      thinkDelay: 45,
+      timeLimitMs: 100,
+      hardTimeLimitMs: 160
+    },
+    2: {
+      label: "Level 2",
+      maxDepth: 2,
+      maxActions: 20,
+      maxTacticalActions: 6,
+      quiescenceDepth: 1,
+      tacticalWeight: 0.75,
+      thinkDelay: 35,
+      timeLimitMs: 280,
+      hardTimeLimitMs: 460
+    },
+    3: {
+      label: "Level 3",
+      maxDepth: 3,
+      maxActions: 26,
+      maxTacticalActions: 8,
+      quiescenceDepth: 1,
+      tacticalWeight: 1.05,
+      thinkDelay: 30,
+      timeLimitMs: 950,
+      hardTimeLimitMs: 1650
+    },
+    4: {
+      label: "Level 4",
+      maxDepth: 4,
+      maxActions: 32,
+      maxTacticalActions: 10,
+      quiescenceDepth: 2,
+      tacticalWeight: 1.35,
+      thinkDelay: 25,
+      timeLimitMs: 1200,
+      hardTimeLimitMs: 2000
+    },
+    5: {
+      label: "Level 5",
+      maxDepth: 7,
+      maxActions: 42,
+      maxTacticalActions: 18,
+      quiescenceDepth: 3,
+      tacticalWeight: 2.35,
+      thinkDelay: 15,
+      timeLimitMs: 2600,
+      hardTimeLimitMs: 4200
+    }
   };
   function loadSettings(storage = globalThis.localStorage) {
     if (!storage)
@@ -3265,17 +3668,36 @@
   var HUMAN_COLOR = COLORS.WHITE;
 
   class GameController {
-    constructor({ boardEl, coordinateEl, statusPanelEl, promotionEl, controlsEl, settingsEl, rulesEl }) {
-      this.renderer = new Renderer({ boardEl, coordinateEl, statusPanelEl, promotionEl, controlsEl, settingsEl, rulesEl });
+    constructor({
+      boardEl,
+      coordinateEl,
+      statusPanelEl,
+      promotionEl,
+      controlsEl,
+      settingsEl,
+      rulesEl
+    }) {
+      this.renderer = new Renderer({
+        boardEl,
+        coordinateEl,
+        statusPanelEl,
+        promotionEl,
+        controlsEl,
+        settingsEl,
+        rulesEl
+      });
       this.animator = new BoardAnimator(boardEl);
       this.state = createGameState();
       this.view = this.createEmptyView();
       this.isAiRunning = false;
+      this.aiRunToken = 0;
+      this.undoStack = [];
+      this.lastUndoAnchorKey = null;
       this.settings = loadSettings();
       this.settingsOpen = false;
       this.rulesOpen = false;
       this.documentClickHandler = (event) => this.handleDocumentClick(event);
-      this.boardContextMenuHandler = (event) => this.suppressBoardContextMenu(event);
+      this.boardContextMenuHandler = (event) => this.handleBoardContextMenu(event);
       boardEl.addEventListener("click", (event) => this.handleBoardClick(event));
       boardEl.addEventListener("contextmenu", this.boardContextMenuHandler);
       boardEl.addEventListener("auxclick", this.boardContextMenuHandler);
@@ -3339,9 +3761,14 @@
       if (piece && ownerOf(piece) === this.state.currentPlayer)
         this.selectPiece(piece);
     }
-    suppressBoardContextMenu(event) {
-      if (event.button === undefined || event.button === 2)
-        event.preventDefault?.();
+    handleBoardContextMenu(event) {
+      if (event.button !== undefined && event.button !== 2)
+        return;
+      event.preventDefault?.();
+      if (!this.view.selectedPiece)
+        return;
+      this.clearSelection();
+      this.render();
     }
     handlePromotionClick(event) {
       const button = event.target.closest("[data-promotion]");
@@ -3357,6 +3784,9 @@
         return;
       if (control.dataset.control === "skip-special") {
         this.skipSpecialMove();
+      }
+      if (control.dataset.control === "undo-turn") {
+        this.undoLastTurn();
       }
       if (control.dataset.control === "new-game") {
         this.newGame();
@@ -3377,13 +3807,19 @@
     handleSettingsInput(event) {
       const target = event.target;
       if (target.id === "ai-level") {
-        this.settings = saveSettings({ ...this.settings, aiLevel: Number(target.value) });
+        this.settings = saveSettings({
+          ...this.settings,
+          aiLevel: Number(target.value)
+        });
         this.clearSelection();
         this.render();
         this.maybeRunAiTurn();
       }
       if (target.id === "animations-enabled") {
-        this.settings = saveSettings({ ...this.settings, animationsEnabled: target.checked });
+        this.settings = saveSettings({
+          ...this.settings,
+          animationsEnabled: target.checked
+        });
         this.render();
       }
     }
@@ -3391,7 +3827,10 @@
       const sideButton = event.target.closest?.("[data-side]");
       if (!sideButton || sideButton.disabled || this.isPlayingAgainstAi())
         return;
-      this.settings = saveSettings({ ...this.settings, playerSide: sideButton.dataset.side });
+      this.settings = saveSettings({
+        ...this.settings,
+        playerSide: sideButton.dataset.side
+      });
       this.render();
     }
     handleDocumentClick(event) {
@@ -3533,6 +3972,7 @@
       this.commitAction(candidates[0]);
     }
     commitAction(action) {
+      this.rememberUndoAnchor();
       const previous = this.animator.snapshot();
       this.state = applyAction(this.state, action);
       this.clearSelection();
@@ -3543,16 +3983,22 @@
     skipSpecialMove() {
       if (!this.canHumanAct() || !canSkipSpecialMove(this.state, this.state.currentPlayer))
         return;
+      this.rememberUndoAnchor();
       const previous = this.animator.snapshot();
       this.state = skipSpecialMove(this.state, this.state.currentPlayer);
       this.clearSelection();
       this.render();
       this.animator.animate(previous, this.state.lastAction, this.settings.animationsEnabled);
-      this.maybeRunAiTurn({ startDelay: this.animationDelay(this.state.lastAction) });
+      this.maybeRunAiTurn({
+        startDelay: this.animationDelay(this.state.lastAction)
+      });
     }
     newGame() {
+      this.aiRunToken += 1;
       this.state = createGameState();
       this.isAiRunning = false;
+      this.undoStack = [];
+      this.lastUndoAnchorKey = null;
       this.settingsOpen = false;
       this.rulesOpen = false;
       this.clearSelection();
@@ -3568,10 +4014,11 @@
     async maybeRunAiTurn({ startDelay = 0 } = {}) {
       if (!this.isPlayingAgainstAi() || this.isAiRunning || this.state.gameOver || this.state.currentPlayer !== AI_COLOR)
         return;
+      const runToken = ++this.aiRunToken;
       this.isAiRunning = true;
       if (startDelay > 0)
         await delay(startDelay);
-      if (!this.isPlayingAgainstAi() || this.state.gameOver || this.state.currentPlayer !== AI_COLOR) {
+      if (runToken !== this.aiRunToken || !this.isPlayingAgainstAi() || this.state.gameOver || this.state.currentPlayer !== AI_COLOR) {
         this.isAiRunning = false;
         this.render();
         return;
@@ -3581,7 +4028,7 @@
       while (this.isPlayingAgainstAi() && !this.state.gameOver && this.state.currentPlayer === AI_COLOR) {
         const aiOptions = aiOptionsForLevel(this.settings.aiLevel);
         await delay(aiOptions.thinkDelay);
-        if (!this.isPlayingAgainstAi() || this.state.gameOver || this.state.currentPlayer !== AI_COLOR)
+        if (runToken !== this.aiRunToken || !this.isPlayingAgainstAi() || this.state.gameOver || this.state.currentPlayer !== AI_COLOR)
           break;
         const action = chooseAiAction(this.state, AI_COLOR, aiOptions);
         if (!action)
@@ -3599,7 +4046,11 @@
         this.render();
         this.animator.animate(previous, action, this.settings.animationsEnabled);
         await delay(this.animationDelay(action));
+        if (runToken !== this.aiRunToken)
+          break;
       }
+      if (runToken !== this.aiRunToken)
+        return;
       this.isAiRunning = false;
       this.clearSelection();
       this.render();
@@ -3616,7 +4067,8 @@
         rulesOpen: this.rulesOpen,
         aiLabel: aiLabelForLevel(this.settings.aiLevel),
         boardSide: effectivePlayerSide(this.settings),
-        sideLocked: this.isPlayingAgainstAi()
+        sideLocked: this.isPlayingAgainstAi(),
+        canUndo: this.canUndo()
       });
     }
     canShowSkip() {
@@ -3626,6 +4078,36 @@
       if (!this.settings.animationsEnabled)
         return 0;
       return Math.max(ANIMATION_TIMING.turnAdvanceDelayMs, moveAnimationDurationForAction(action) + 60);
+    }
+    rememberUndoAnchor() {
+      if (!this.canHumanAct())
+        return;
+      const key = turnUndoKey(this.state);
+      if (this.lastUndoAnchorKey === key)
+        return;
+      this.undoStack.push({
+        key,
+        state: cloneState(this.state)
+      });
+      if (this.undoStack.length > 40)
+        this.undoStack.shift();
+      this.lastUndoAnchorKey = key;
+    }
+    canUndo() {
+      return !this.isAiRunning && this.undoStack.length > 0;
+    }
+    undoLastTurn() {
+      if (!this.canUndo())
+        return;
+      this.aiRunToken += 1;
+      const entry = this.undoStack.pop();
+      this.state = cloneState(entry.state);
+      this.lastUndoAnchorKey = null;
+      this.isAiRunning = false;
+      this.settingsOpen = false;
+      this.rulesOpen = false;
+      this.clearSelection();
+      this.render();
     }
   }
   function highlightsForActions(state2, actions, selectedPiece) {
@@ -3694,7 +4176,9 @@
     return lifeCount * 100 - deathCount * 1000;
   }
   function uniqueSquareKeys(squares) {
-    return [...new Set(squares.filter(Boolean).map((square) => squareKey(square)))];
+    return [
+      ...new Set(squares.filter(Boolean).map((square) => squareKey(square)))
+    ];
   }
   function delay(ms) {
     return new Promise((resolve) => {
@@ -3703,6 +4187,9 @@
   }
   function playerName2(color) {
     return color === COLORS.WHITE ? "White" : "Black";
+  }
+  function turnUndoKey(state2) {
+    return `${state2.currentPlayer}|${state2.moveNumber}`;
   }
 
   // src/main.js

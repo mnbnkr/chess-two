@@ -27,6 +27,7 @@ import {
   loadSettings,
   saveSettings,
 } from "./settings.js";
+import { AI_WORKER_SOURCE } from "../generated/ai-worker-source.js";
 
 const AI_COLOR = COLORS.BLACK;
 const HUMAN_COLOR = COLORS.WHITE;
@@ -191,6 +192,12 @@ export class GameController {
   handleSettingsInput(event) {
     const target = event.target;
     if (target.id === "ai-level") {
+      const wasRunningAi = this.isAiRunning;
+      if (wasRunningAi) {
+        this.aiRunToken += 1;
+        this.isAiRunning = false;
+        cancelAiWorkerSearch();
+      }
       this.settings = saveSettings({
         ...this.settings,
         aiLevel: Number(target.value),
@@ -417,6 +424,7 @@ export class GameController {
 
   newGame() {
     this.aiRunToken += 1;
+    cancelAiWorkerSearch();
     this.state = createGameState();
     this.isAiRunning = false;
     this.undoStack = [];
@@ -473,7 +481,19 @@ export class GameController {
         this.state.currentPlayer !== AI_COLOR
       )
         break;
-      const action = chooseAiAction(this.state, AI_COLOR, aiOptions);
+      let action = null;
+      try {
+        action = await chooseAiActionForUi(this.state, AI_COLOR, aiOptions);
+      } catch {
+        break;
+      }
+      if (
+        runToken !== this.aiRunToken ||
+        !this.isPlayingAgainstAi() ||
+        this.state.gameOver ||
+        this.state.currentPlayer !== AI_COLOR
+      )
+        break;
       if (!action) break;
       const statusState = this.state;
       const previous = this.animator.snapshot();
@@ -551,6 +571,7 @@ export class GameController {
   undoLastTurn() {
     if (!this.canUndo()) return;
     this.aiRunToken += 1;
+    cancelAiWorkerSearch();
     const entry = this.undoStack.pop();
     this.state = cloneState(entry.state);
     this.lastUndoAnchorKey = null;
@@ -645,6 +666,147 @@ function uniqueSquareKeys(squares) {
   return [
     ...new Set(squares.filter(Boolean).map((square) => squareKey(square))),
   ];
+}
+
+async function chooseAiActionForUi(state, color, options) {
+  if (typeof globalThis.Worker === "function") {
+    const workerOptions = AI_WORKER_SOURCE
+      ? { inlineSource: AI_WORKER_SOURCE }
+      : {};
+    try {
+      return await chooseAiActionInWorker(state, color, options, workerOptions);
+    } catch (error) {
+      if (isAiWorkerCancellation(error) || !isAiWorkerStartupFailure(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return chooseAiActionOnMainThread(state, color, options);
+}
+
+function chooseAiActionInWorker(state, color, options, { inlineSource } = {}) {
+  return new Promise((resolve, reject) => {
+    const workerUrl = inlineSource
+      ? URL.createObjectURL(
+          new Blob([inlineSource], { type: "text/javascript" }),
+        )
+      : new URL("ai-worker.bundle.js", globalThis.location?.href).href;
+    let worker = null;
+    try {
+      worker = new Worker(workerUrl);
+    } catch (error) {
+      if (inlineSource) URL.revokeObjectURL(workerUrl);
+      reject(aiWorkerStartupError(error));
+      return;
+    }
+    const id =
+      globalThis.crypto?.randomUUID?.() ??
+      `ai-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let settled = false;
+    const timeoutMs =
+      Math.max(options?.hardTimeLimitMs ?? 0, options?.timeLimitMs ?? 0) + 1200;
+    const timer =
+      timeoutMs > 1200
+        ? setTimeout(() => {
+            cleanupWorker(worker, workerUrl, inlineSource);
+            reject(new Error("AI worker timed out"));
+          }, timeoutMs)
+        : null;
+
+    activeAiWorker = {
+      reject,
+      timer,
+      url: workerUrl,
+      usesObjectUrl: Boolean(inlineSource),
+      worker,
+    };
+
+    worker.onmessage = (event) => {
+      if (event.data?.id !== id) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      cleanupWorker(worker, workerUrl, inlineSource);
+      if (event.data.error) {
+        reject(new Error(event.data.error));
+        return;
+      }
+      resolve(event.data.action ?? null);
+    };
+
+    worker.onerror = (event) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      cleanupWorker(worker, workerUrl, inlineSource);
+      reject(event.error ?? new Error("AI worker failed"));
+    };
+
+    worker.postMessage({ id, state, color, options });
+  });
+}
+
+async function chooseAiActionOnMainThread(state, color, options) {
+  await delay(0);
+  return chooseAiAction(state, color, mainThreadAiOptions(options));
+}
+
+function mainThreadAiOptions(options = {}) {
+  const timeLimitMs =
+    options.timeLimitMs && options.timeLimitMs > 0 ? options.timeLimitMs : 650;
+  const hardTimeLimitMs =
+    options.hardTimeLimitMs && options.hardTimeLimitMs > 0
+      ? options.hardTimeLimitMs
+      : 950;
+  return {
+    ...options,
+    maxDepth: Math.min(options.maxDepth ?? 3, 5),
+    maxActions: Math.min(options.maxActions ?? 36, 34),
+    maxTacticalActions: Math.min(options.maxTacticalActions ?? 8, 14),
+    quiescenceDepth: Math.min(options.quiescenceDepth ?? 0, 2),
+    priorityOverflowLimit: Math.min(options.priorityOverflowLimit ?? 12, 12),
+    timeLimitMs: Math.min(timeLimitMs, 650),
+    hardTimeLimitMs: Math.min(hardTimeLimitMs, 950),
+  };
+}
+
+function isAiWorkerCancellation(error) {
+  return errorMessage(error).includes("cancelled");
+}
+
+function isAiWorkerStartupFailure(error) {
+  return Boolean(error?.aiWorkerStartupFailed);
+}
+
+function aiWorkerStartupError(error) {
+  const startupError = new Error(
+    errorMessage(error) || "AI worker startup failed",
+  );
+  startupError.cause = error;
+  startupError.aiWorkerStartupFailed = true;
+  return startupError;
+}
+
+function errorMessage(error) {
+  return String(error?.message ?? error ?? "");
+}
+
+let activeAiWorker = null;
+
+function cancelAiWorkerSearch() {
+  if (!activeAiWorker) return;
+  const { reject, timer, url, usesObjectUrl, worker } = activeAiWorker;
+  activeAiWorker = null;
+  if (timer) clearTimeout(timer);
+  worker.terminate();
+  if (usesObjectUrl) URL.revokeObjectURL(url);
+  reject(new Error("AI worker cancelled"));
+}
+
+function cleanupWorker(worker, url, inlineSource) {
+  if (activeAiWorker?.worker === worker) activeAiWorker = null;
+  worker.terminate();
+  if (inlineSource) URL.revokeObjectURL(url);
 }
 
 function delay(ms) {

@@ -1967,7 +1967,7 @@ test("settings persist and AI slider maps to stronger search options", () => {
       aiOptionsForLevel(level + 1).maxTacticalActions,
     ).toBeGreaterThanOrEqual(aiOptionsForLevel(level).maxTacticalActions);
   }
-  expect(aiOptionsForLevel(5).maxDepth).toBe(7);
+  expect(aiOptionsForLevel(5).maxDepth).toBe(8);
   expect(aiOptionsForLevel(5).maxDepth).toBeGreaterThan(
     aiOptionsForLevel(4).maxDepth,
   );
@@ -1979,10 +1979,11 @@ test("settings persist and AI slider maps to stronger search options", () => {
   );
   expect(aiOptionsForLevel(4).timeLimitMs).toBe(1200);
   expect(aiOptionsForLevel(4).hardTimeLimitMs).toBe(2000);
-  expect(aiOptionsForLevel(5).maxActions).toBe(36);
-  expect(aiOptionsForLevel(5).maxTacticalActions).toBe(14);
-  expect(aiOptionsForLevel(5).timeLimitMs).toBe(1500);
-  expect(aiOptionsForLevel(5).hardTimeLimitMs).toBe(2400);
+  expect(aiOptionsForLevel(5).maxActions).toBe(54);
+  expect(aiOptionsForLevel(5).maxTacticalActions).toBe(26);
+  expect(aiOptionsForLevel(5).quiescenceDepth).toBe(4);
+  expect(aiOptionsForLevel(5).timeLimitMs).toBe(3000);
+  expect(aiOptionsForLevel(5).hardTimeLimitMs).toBe(4600);
   expect(aiOptionsForLevel(5).timeLimitMs).toBeGreaterThan(
     aiOptionsForLevel(4).timeLimitMs,
   );
@@ -2233,6 +2234,40 @@ test("renderer opens the rules popup independently from settings", () => {
   globalThis.document = previousDocument;
 });
 
+test("renderer keeps settings and rules controls interactive while AI thinks", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const controls = makeControls();
+  const settings = makeSettingsPanel();
+  const renderer = new Renderer({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: controls,
+    settingsEl: settings,
+    rulesEl: makeRulesPanel(),
+  });
+
+  renderer.render(createGameState(), {
+    isAiThinking: true,
+    settings: { aiLevel: 5, animationsEnabled: true, playerSide: "white" },
+    settingsOpen: true,
+    aiLabel: "Level 5",
+  });
+
+  expect(controls.querySelector('[data-control="settings"]').disabled).toBe(
+    false,
+  );
+  expect(controls.querySelector('[data-control="rules"]').disabled).toBe(false);
+  expect(settings.querySelector("#ai-level").disabled).toBe(false);
+  expect(settings.querySelector("#animations-enabled").disabled).toBe(false);
+
+  globalThis.document = previousDocument;
+});
+
 test("controller deselects a selected piece when its own square is clicked", () => {
   const previousDocument = globalThis.document;
   const previousLocalStorage = globalThis.localStorage;
@@ -2258,6 +2293,39 @@ test("controller deselects a selected piece when its own square is clicked", () 
     },
   });
   expect(controller.view.selectedPiece).toBe(null);
+
+  globalThis.document = previousDocument;
+  globalThis.localStorage = previousLocalStorage;
+});
+
+test("controller cancels an active AI search when the AI level changes", () => {
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    addEventListener() {},
+  };
+  globalThis.localStorage = null;
+
+  const settings = makeSettingsPanel();
+  const controller = new GameController({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: settings,
+    rulesEl: makeRulesPanel(),
+  });
+  controller.isAiRunning = true;
+  controller.aiRunToken = 12;
+
+  const aiLevel = settings.querySelector("#ai-level");
+  aiLevel.value = "0";
+  controller.handleSettingsInput({ target: aiLevel });
+
+  expect(controller.isAiRunning).toBe(false);
+  expect(controller.aiRunToken).toBe(13);
+  expect(controller.settings.aiLevel).toBe(0);
 
   globalThis.document = previousDocument;
   globalThis.localStorage = previousLocalStorage;

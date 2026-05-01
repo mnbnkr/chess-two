@@ -21,11 +21,14 @@ const DEFAULT_OPTIONS = {
   maxTacticalActions: 8,
   quiescenceDepth: 0,
   tacticalWeight: 1,
-  transpositionLimit: 25000,
+  transpositionLimit: 50000,
+  evaluationLimit: 50000,
+  actionCacheLimit: 50000,
   timeLimitMs: 0,
   hardTimeLimitMs: 0,
   depthStartMargin: 1.75,
   priorityOverflowLimit: 12,
+  forcedRootTactics: 6,
 };
 
 const LIFE_DEATH_STRATEGIC_VALUES = {
@@ -36,6 +39,8 @@ const LIFE_DEATH_STRATEGIC_VALUES = {
 export function chooseAiAction(state, color = "black", options = {}) {
   const settings = { ...DEFAULT_OPTIONS, ...options };
   settings.transposition = new Map();
+  settings.evaluations = new Map();
+  settings.actionCache = new Map();
   settings.startedAt = now();
   settings.softDeadline =
     settings.timeLimitMs > 0
@@ -43,11 +48,21 @@ export function chooseAiAction(state, color = "black", options = {}) {
       : Number.POSITIVE_INFINITY;
   settings.deadline = hardDeadline(settings);
   settings.timedOut = false;
-  const actions = selectSearchActions(
+  const legalRootActions = legalActionsForSearch(state, color, settings);
+  const rootTactics = findRootTactics(
     state,
-    generateLegalActions(state, color),
+    legalRootActions,
     color,
     settings,
+  );
+  const dominantTactic = rootTactics[0] ?? null;
+  if (dominantTactic?.forceImmediate) return dominantTactic.action;
+  let actions = selectSearchActions(
+    state,
+    legalRootActions,
+    color,
+    settings,
+    rootTactics.map((tactic) => tactic.action),
   );
   if (actions.length === 0) return null;
 
@@ -60,12 +75,21 @@ export function chooseAiAction(state, color = "black", options = {}) {
     const depthStartedAt = now();
     const result = searchRoot(state, color, settings, actions, depth);
     const depthElapsed = now() - depthStartedAt;
-    if (result.action && (result.completed || depth === 1)) best = result;
+    if (result.action && (result.completed || depth === 1)) {
+      best = result;
+      actions = promoteAction(actions, result.action);
+    }
     if (result.completed) lastDepthMs = depthElapsed;
     if (!result.completed || isSoftTimeUp(settings)) break;
   }
 
-  return best.action;
+  return maybePreferDominantTactic(
+    state,
+    best.action,
+    dominantTactic,
+    color,
+    settings,
+  );
 }
 
 function searchRoot(state, color, settings, actions, depth) {
@@ -80,10 +104,11 @@ function searchRoot(state, color, settings, actions, depth) {
       return { action: bestAction, score: bestScore, completed: false };
     }
     const next = applySearchAction(state, action);
+    const nextDepth = nextDepthAfterAction(state, next, depth);
     const score =
-      (depth <= 1
-        ? evaluateState(next, color)
-        : minimax(next, depth - 1, alpha, beta, color, settings)) +
+      (nextDepth <= 0
+        ? evaluateForSearch(next, color, settings)
+        : minimax(next, nextDepth, alpha, beta, color, settings)) +
       actionHeuristic(state, action, color) * rootHeuristicWeight(depth) +
       rootTacticalScore(state, next, action, color, settings);
     if (
@@ -105,7 +130,7 @@ function searchRoot(state, color, settings, actions, depth) {
 }
 
 function minimax(state, depth, alpha, beta, aiColor, settings) {
-  if (state.gameOver) return evaluateState(state, aiColor);
+  if (state.gameOver) return evaluateForSearch(state, aiColor, settings);
   if (depth <= 0)
     return quiescence(
       state,
@@ -117,65 +142,99 @@ function minimax(state, depth, alpha, beta, aiColor, settings) {
     );
   if (isTimeUp(settings)) {
     settings.timedOut = true;
-    return evaluateState(state, aiColor);
+    return evaluateForSearch(state, aiColor, settings);
   }
 
   const cacheKey = stateKey(state, depth, aiColor);
+  const alphaStart = alpha;
+  const betaStart = beta;
   const cached = settings.transposition?.get(cacheKey);
-  if (cached !== undefined) return cached;
+  if (cached) {
+    if (cached.flag === "exact") return cached.value;
+    if (cached.flag === "lower") alpha = Math.max(alpha, cached.value);
+    if (cached.flag === "upper") beta = Math.min(beta, cached.value);
+    if (alpha >= beta) return cached.value;
+  }
 
-  const actions = selectSearchActions(
+  const legalActions = legalActionsForSearch(
     state,
-    generateLegalActions(state, state.currentPlayer),
-    aiColor,
+    state.currentPlayer,
     settings,
   );
-  if (actions.length === 0) return evaluateState(state, aiColor);
+  const cachedAction = cached?.bestActionId
+    ? legalActions.find((action) => action.id === cached.bestActionId)
+    : null;
+  const actions = selectSearchActions(
+    state,
+    legalActions,
+    aiColor,
+    settings,
+    cachedAction ? [cachedAction] : [],
+  );
+  if (actions.length === 0) return evaluateForSearch(state, aiColor, settings);
 
   const maximizing = state.currentPlayer === aiColor;
   if (maximizing) {
     let value = Number.NEGATIVE_INFINITY;
+    let bestActionId = actions[0]?.id ?? null;
     for (const action of actions) {
-      value = Math.max(
-        value,
+      const next = applySearchAction(state, action);
+      const score =
         minimax(
-          applySearchAction(state, action),
-          depth - 1,
+          next,
+          nextDepthAfterAction(state, next, depth),
           alpha,
           beta,
           aiColor,
           settings,
-        ),
-      );
+        ) +
+        transitionTacticalScore(state, next, action, aiColor, settings) *
+          continuationTacticalWeight(depth);
+      if (score > value) {
+        value = score;
+        bestActionId = action.id;
+      }
       alpha = Math.max(alpha, value);
-      if (alpha >= beta) break;
+      if (alpha >= beta) {
+        break;
+      }
     }
-    if (!settings.timedOut) cacheValue(settings, cacheKey, value);
+    if (!settings.timedOut)
+      cacheValue(settings, cacheKey, value, alphaStart, betaStart, bestActionId);
     return value;
   }
 
   let value = Number.POSITIVE_INFINITY;
+  let bestActionId = actions[0]?.id ?? null;
   for (const action of actions) {
-    value = Math.min(
-      value,
+    const next = applySearchAction(state, action);
+    const score =
       minimax(
-        applySearchAction(state, action),
-        depth - 1,
+        next,
+        nextDepthAfterAction(state, next, depth),
         alpha,
         beta,
         aiColor,
         settings,
-      ),
-    );
+      ) +
+      transitionTacticalScore(state, next, action, aiColor, settings) *
+        continuationTacticalWeight(depth);
+    if (score < value) {
+      value = score;
+      bestActionId = action.id;
+    }
     beta = Math.min(beta, value);
-    if (alpha >= beta) break;
+    if (alpha >= beta) {
+      break;
+    }
   }
-  if (!settings.timedOut) cacheValue(settings, cacheKey, value);
+  if (!settings.timedOut)
+    cacheValue(settings, cacheKey, value, alphaStart, betaStart, bestActionId);
   return value;
 }
 
 function quiescence(state, depth, alpha, beta, aiColor, settings) {
-  const standPat = evaluateState(state, aiColor);
+  const standPat = evaluateForSearch(state, aiColor, settings);
   if (state.gameOver || depth <= 0 || isTimeUp(settings)) {
     if (isTimeUp(settings)) settings.timedOut = true;
     return standPat;
@@ -183,7 +242,9 @@ function quiescence(state, depth, alpha, beta, aiColor, settings) {
 
   const actions = selectSearchActions(
     state,
-    generateLegalActions(state, state.currentPlayer).filter(isForcingAction),
+    legalActionsForSearch(state, state.currentPlayer, settings).filter(
+      isForcingAction,
+    ),
     aiColor,
     { ...settings, maxActions: settings.maxTacticalActions },
   );
@@ -194,16 +255,19 @@ function quiescence(state, depth, alpha, beta, aiColor, settings) {
     let value = standPat;
     alpha = Math.max(alpha, value);
     for (const action of actions) {
+      const next = applySearchAction(state, action);
       value = Math.max(
         value,
         quiescence(
-          applySearchAction(state, action),
-          depth - 1,
+          next,
+          nextDepthAfterAction(state, next, depth),
           alpha,
           beta,
           aiColor,
           settings,
-        ),
+        ) +
+          transitionTacticalScore(state, next, action, aiColor, settings) *
+            continuationTacticalWeight(depth),
       );
       alpha = Math.max(alpha, value);
       if (isTimeUp(settings)) settings.timedOut = true;
@@ -215,16 +279,19 @@ function quiescence(state, depth, alpha, beta, aiColor, settings) {
   let value = standPat;
   beta = Math.min(beta, value);
   for (const action of actions) {
+    const next = applySearchAction(state, action);
     value = Math.min(
       value,
       quiescence(
-        applySearchAction(state, action),
-        depth - 1,
+        next,
+        nextDepthAfterAction(state, next, depth),
         alpha,
         beta,
         aiColor,
         settings,
-      ),
+      ) +
+        transitionTacticalScore(state, next, action, aiColor, settings) *
+          continuationTacticalWeight(depth),
     );
     beta = Math.min(beta, value);
     if (isTimeUp(settings)) settings.timedOut = true;
@@ -237,11 +304,202 @@ function applySearchAction(state, action) {
   return applyAction(state, action, { recordHistory: false });
 }
 
-export function evaluateState(state, color = "black") {
+function nextDepthAfterAction(before, after, depth) {
+  if (depth <= 0 || after.gameOver) return 0;
+  return after.currentPlayer === before.currentPlayer ? depth : depth - 1;
+}
+
+function promoteAction(actions, preferred) {
+  if (!preferred || actions[0]?.id === preferred.id) return actions;
+  const index = actions.findIndex((action) => action.id === preferred.id);
+  if (index <= 0) return actions;
+  return [
+    actions[index],
+    ...actions.slice(0, index),
+    ...actions.slice(index + 1),
+  ];
+}
+
+function evaluateForSearch(state, color, settings) {
+  const key = stateKey(state, 0, color);
+  const cached = settings.evaluations?.get(key);
+  if (cached !== undefined) return cached;
+  const value = evaluateState(state, color, {
+    actionsProvider: (targetState, targetColor, actionOptions = {}) =>
+      legalActionsForSearch(targetState, targetColor, settings, actionOptions),
+  });
+  cacheLimitedValue(settings.evaluations, settings.evaluationLimit, key, value);
+  return value;
+}
+
+function legalActionsForSearch(
+  state,
+  color = state.currentPlayer,
+  settings = DEFAULT_OPTIONS,
+  options = {},
+) {
+  const respectTurn = options.respectTurn ?? true;
+  const includeSkip = options.includeSkip ?? true;
+  const key = [
+    stateKey(state, 0, color),
+    respectTurn ? 1 : 0,
+    includeSkip ? 1 : 0,
+  ].join("~actions~");
+  const cached = settings.actionCache?.get(key);
+  if (cached) return cached;
+  const actions = generateLegalActions(state, color, {
+    ...options,
+    respectTurn,
+    includeSkip,
+  });
+  cacheLimitedValue(
+    settings.actionCache,
+    settings.actionCacheLimit,
+    key,
+    actions,
+  );
+  return actions;
+}
+
+function findRootTactics(state, actions, color, settings) {
+  if ((settings.tacticalWeight ?? 1) < 1.4) return [];
+
+  const tactics = [];
+  for (const action of actions) {
+    const score = safeRootTacticalScore(state, action, color, settings);
+    if (score <= 0) continue;
+    tactics.push({ action, score, forceImmediate: false });
+  }
+  tactics.sort(
+    (a, b) =>
+      b.score - a.score ||
+      compareAiActions(state, a.action, b.action, color),
+  );
+  if (tactics.length === 0) return [];
+
+  for (const tactic of tactics) {
+    if (tactic.action.target?.type === PIECE_TYPES.KING) {
+      tactic.forceImmediate = true;
+    }
+
+    if (
+      tactic.action.mode === "kill" &&
+      tactic.score >= 980 &&
+      hasInferiorShieldBreakOnSameTarget(actions, tactic.action)
+    ) {
+      tactic.forceImmediate = true;
+    }
+  }
+
+  return tactics.slice(0, settings.forcedRootTactics ?? 6);
+}
+
+function maybePreferDominantTactic(
+  state,
+  bestAction,
+  dominantTactic,
+  color,
+  settings,
+) {
+  if (!dominantTactic || bestAction.id === dominantTactic.action.id)
+    return bestAction;
+
+  const bestImmediateScore = safeRootTacticalScore(
+    state,
+    bestAction,
+    color,
+    settings,
+  );
+  const margin = dominantTacticMargin(dominantTactic.action);
+  if (
+    dominantTactic.score > bestImmediateScore + margin &&
+    dominantTactic.score >= dominantTacticThreshold(dominantTactic.action)
+  ) {
+    return dominantTactic.action;
+  }
+
+  return bestAction;
+}
+
+function safeRootTacticalScore(state, action, color, settings) {
+  const immediate = immediateTacticalScore(state, action, color);
+  if (immediate <= 0) return 0;
+  const actor = findPieceById(state, action.pieceId);
+  const after = applySearchAction(state, action);
+  const exposure = postActionExposurePenalty(after, action, color, settings);
+  const destruction = selfDestructionPenalty(after, actor, action, color);
+  return Math.max(0, immediate - exposure * 0.65 - destruction * 0.8);
+}
+
+function dominantTacticMargin(action) {
+  if (action.mode === "kill") return 220;
+  if (action.kind === "attack" && !action.target?.hadShield) return 180;
+  return 420;
+}
+
+function dominantTacticThreshold(action) {
+  if (action.target?.type === PIECE_TYPES.KING) return 1;
+  if (action.mode === "kill") return 760;
+  if (action.kind === "attack" && !action.target?.hadShield) return 620;
+  return 980;
+}
+
+function immediateTacticalScore(state, action, color) {
+  if (!action?.target) return 0;
+  const targetOwner = ownerFromSnapshot(action.target);
+  if (targetOwner === color) return 0;
+  if (action.target.type === PIECE_TYPES.KING) return 1_000_000;
+
+  let score = 0;
+  if (action.mode === "kill") {
+    score =
+      760 +
+      targetActionValue(action) * 2.25 +
+      (action.target.hadShield
+        ? 260 + shieldValueForType(action.target.type) * 1.25
+        : 0);
+  } else if (action.kind === "attack" && !action.target.hadShield) {
+    score = 340 + targetActionValue(action) * 1.65;
+  } else if (action.kind === "attack" && action.target.hadShield) {
+    score = shieldPressureValue(action.target) * 1.15;
+  }
+
+  if (score <= 0) return 0;
+  score += lifeDeathTransferScore(state, action, color);
+  score += lifeDeathAnnihilationScore(state, action, color);
+
+  const actor = findPieceById(state, action.pieceId);
+  const after = applySearchAction(state, action);
+  if (
+    actor &&
+    action.target.type !== PIECE_TYPES.KING &&
+    !findPieceById(after, action.pieceId)
+  ) {
+    score -= pieceStake(actor) * 1.15;
+  }
+
+  return Math.max(0, score);
+}
+
+function hasInferiorShieldBreakOnSameTarget(actions, tactic) {
+  return actions.some(
+    (action) =>
+      action.id !== tactic.id &&
+      action.kind === "attack" &&
+      action.targetId === tactic.targetId &&
+      action.target?.hadShield,
+  );
+}
+
+export function evaluateState(state, color = "black", options = {}) {
   if (state.gameOver) {
     if (!state.gameOver.winner) return 0;
     return state.gameOver.winner === color ? 1_000_000 : -1_000_000;
   }
+  const actionsFor =
+    options.actionsProvider ??
+    ((targetState, targetColor, actionOptions) =>
+      generateLegalActions(targetState, targetColor, actionOptions));
 
   let score = 0;
   const lifeCounts = lifeCountsByOwner(state);
@@ -268,9 +526,9 @@ export function evaluateState(state, color = "black") {
   if (!enemyKing) score += 900_000;
 
   const enemy = oppositeColor(color);
-  const currentActions = generateLegalActions(state, state.currentPlayer);
-  const ownActions = generateLegalActions(state, color, { respectTurn: false });
-  const enemyActions = generateLegalActions(state, enemy, {
+  const currentActions = actionsFor(state, state.currentPlayer);
+  const ownActions = actionsFor(state, color, { respectTurn: false });
+  const enemyActions = actionsFor(state, enemy, {
     respectTurn: false,
   });
   score +=
@@ -293,7 +551,7 @@ function orderAiActions(
   actions,
   color,
   settings,
-  context = buildActionContext(state),
+  context = buildActionContext(state, settings),
 ) {
   const direction = state.currentPlayer === color ? 1 : -1;
   const scores = new Map(
@@ -309,20 +567,33 @@ function orderAiActions(
   );
 }
 
-function selectSearchActions(state, actions, color, settings) {
-  const context = buildActionContext(state);
+function selectSearchActions(state, actions, color, settings, forced = []) {
+  const context = buildActionContext(state, settings);
   const disciplinedActions = actions.filter(
     (action) => !isBadFatalShieldBreak(state, action),
   );
+  const candidateActions =
+    disciplinedActions.length > 0 ? disciplinedActions : actions;
+  const nonDominatedActions = candidateActions.filter(
+    (action) => !isDominatedBySameRestShieldBreak(candidateActions, action),
+  );
   const ordered = orderAiActions(
     state,
-    sortActions(disciplinedActions.length > 0 ? disciplinedActions : actions),
+    sortActions(
+      nonDominatedActions.length > 0 ? nonDominatedActions : candidateActions,
+    ),
     color,
     settings,
     context,
   );
   const selected = ordered.slice(0, settings.maxActions);
   const selectedIds = new Set(selected.map((action) => action.id));
+  for (const action of forced) {
+    if (action && !selectedIds.has(action.id)) {
+      selected.push(action);
+      selectedIds.add(action.id);
+    }
+  }
   const priorityLimit =
     settings.maxActions + (settings.priorityOverflowLimit ?? 12);
   for (const action of ordered) {
@@ -333,6 +604,20 @@ function selectSearchActions(state, actions, color, settings) {
     selectedIds.add(action.id);
   }
   return selected;
+}
+
+function isDominatedBySameRestShieldBreak(actions, action) {
+  if (action.kind !== "move" || action.mode !== "slide" || !action.to)
+    return false;
+  return actions.some(
+    (candidate) =>
+      candidate.kind === "attack" &&
+      candidate.mode === "rangedAttack" &&
+      candidate.pieceId === action.pieceId &&
+      candidate.target?.hadShield &&
+      candidate.rest &&
+      sameSquare(candidate.rest, action.to),
+  );
 }
 
 function isBadFatalShieldBreak(state, action) {
@@ -356,11 +641,11 @@ function compareAiActions(state, a, b, color) {
   );
 }
 
-function buildActionContext(state) {
+function buildActionContext(state, settings = DEFAULT_OPTIONS) {
   const mover = state.currentPlayer;
   const opponent = oppositeColor(mover);
   const threats = exposureByTarget(
-    generateLegalActions(state, opponent, { respectTurn: false }),
+    legalActionsForSearch(state, opponent, settings, { respectTurn: false }),
     mover,
   );
   return {
@@ -375,7 +660,7 @@ function actionHeuristic(
   action,
   color,
   settings = DEFAULT_OPTIONS,
-  context = buildActionContext(state),
+  context = buildActionContext(state, settings),
 ) {
   let score = 0;
   const pathReport = pathEffectReport(state, action);
@@ -459,17 +744,32 @@ function rootTacticalScore(before, after, action, color, settings) {
     score += intimidatedTargetTacticalBonus(action, color);
     score += shieldBreakTacticalBonus(after, actor, action, color);
     score += shieldTradeDiscipline(actor, action);
-    score -= missedDeathKillPenalty(before, action, color);
+    score -= missedDeathKillPenalty(before, action, color, settings);
   }
   if (action.mode === "kill") score += deathKillTacticalBonus(action, color);
   if (action.mode === "heal") score += healTacticalBonus(action, color);
+  score += pathEffectScore(pathEffectReport(before, action)) * 0.72;
   score += lifeDeathTransferScore(before, action, color) * 0.85;
   score += lifeDeathAnnihilationScore(before, action, color) * 0.9;
-  score += defensiveRootScore(before, after, actor, action, color);
-  score += teamSafetyDeltaScore(before, after, color);
+  score += defensiveRootScore(before, after, actor, action, color, settings);
+  score += teamSafetyDeltaScore(before, after, color, settings);
   score -= selfDestructionPenalty(after, actor, action, color);
-  score -= postActionExposurePenalty(after, action, color);
+  score -= postActionExposurePenalty(after, action, color, settings);
   return score * (settings.tacticalWeight ?? 1);
+}
+
+function transitionTacticalScore(before, after, action, aiColor, settings) {
+  const actor = findPieceById(before, action.pieceId);
+  if (!actor) return 0;
+  const actorOwner = ownerOf(actor);
+  const score = rootTacticalScore(before, after, action, actorOwner, settings);
+  return actorOwner === aiColor ? score : -score;
+}
+
+function continuationTacticalWeight(depth) {
+  if (depth >= 6) return 0.16;
+  if (depth >= 4) return 0.2;
+  return 0.26;
 }
 
 function captureTacticalBonus(actor, action) {
@@ -530,9 +830,14 @@ function shieldBreakTacticalBonus(after, actor, action, color) {
   return bonus;
 }
 
-function defensiveRootScore(before, after, actor, action, color) {
+function defensiveRootScore(before, after, actor, action, color, settings) {
   if (!actor || ownerOf(actor) !== color || after.gameOver) return 0;
-  const beforeRisk = pieceExposureRisk(before, actor.id, ownerOf(actor));
+  const beforeRisk = pieceExposureRisk(
+    before,
+    actor.id,
+    ownerOf(actor),
+    settings,
+  );
   if (beforeRisk <= 0) return 0;
 
   const afterActor = findPieceById(after, action.pieceId);
@@ -542,6 +847,7 @@ function defensiveRootScore(before, after, actor, action, color) {
     after,
     afterActor.id,
     ownerOf(afterActor),
+    settings,
   );
   const saved = Math.max(0, beforeRisk - afterRisk);
   const worsened = Math.max(0, afterRisk - beforeRisk);
@@ -550,14 +856,18 @@ function defensiveRootScore(before, after, actor, action, color) {
   return saved * savedWeight - worsened * worsenedWeight;
 }
 
-function teamSafetyDeltaScore(before, after, color) {
+function teamSafetyDeltaScore(before, after, color, settings) {
   if (after.gameOver) return 0;
   const beforeExposure = exposureSummary(
-    generateLegalActions(before, oppositeColor(color), { respectTurn: false }),
+    legalActionsForSearch(before, oppositeColor(color), settings, {
+      respectTurn: false,
+    }),
     color,
   );
   const afterExposure = exposureSummary(
-    generateLegalActions(after, oppositeColor(color), { respectTurn: false }),
+    legalActionsForSearch(after, oppositeColor(color), settings, {
+      respectTurn: false,
+    }),
     color,
   );
   const totalDelta = beforeExposure.total - afterExposure.total;
@@ -592,14 +902,17 @@ function selfDestructionPenalty(after, actor, action, color) {
   return Math.max(0, penalty);
 }
 
-function postActionExposurePenalty(state, action, color) {
+function postActionExposurePenalty(state, action, color, settings) {
   const actor = findPieceById(state, action.pieceId);
   if (!actor || ownerOf(actor) !== color || state.gameOver) return 0;
 
   let worstReply = 0;
-  for (const reply of generateLegalActions(state, oppositeColor(color), {
-    respectTurn: false,
-  })) {
+  for (const reply of legalActionsForSearch(
+    state,
+    oppositeColor(color),
+    settings,
+    { respectTurn: false },
+  )) {
     if (reply.targetId !== actor.id) continue;
     worstReply = Math.max(worstReply, actionExposureValue(reply));
   }
@@ -651,7 +964,7 @@ function deathKillTacticalBonus(action, color) {
   return 420 + targetValue * 1.08 + shieldExecutionBonus;
 }
 
-function missedDeathKillPenalty(state, action, color) {
+function missedDeathKillPenalty(state, action, color, settings) {
   if (
     action.kind !== "attack" ||
     !action.target?.hadShield ||
@@ -662,7 +975,7 @@ function missedDeathKillPenalty(state, action, color) {
 
   let bestKillValue = 0;
   let sameTargetKillValue = 0;
-  for (const candidate of generateLegalActions(state, color)) {
+  for (const candidate of legalActionsForSearch(state, color, settings)) {
     if (candidate.mode !== "kill") continue;
     if (ownerFromSnapshot(candidate.target) === color) continue;
     const transfer = lifeDeathTransferScore(state, candidate, color);
@@ -721,11 +1034,18 @@ function pathEffectReport(state, action) {
   const report = {
     shieldGained: false,
     shieldLost: false,
+    ownDeathShieldLoss: false,
+    knightDeathShieldLoss: false,
     diesAfterAction: false,
     deathStaging: Boolean(action.deathStaging),
     deathLanding: Boolean(action.deathLanding),
     lifeCount: 0,
     deathCount: 0,
+    ownDeathCount: 0,
+    enemyDeathCount: 0,
+    knightDeathRampCount: 0,
+    ownKnightDeathRampCount: 0,
+    lateKnightDeathRamp: false,
     actorValue: actor ? materialValue(actor.type) : 0,
     shieldValue: actor?.hasShield ? shieldValueForType(actor.type) : 0,
   };
@@ -733,7 +1053,8 @@ function pathEffectReport(state, action) {
 
   if (!actor.isImmune) {
     let hasShield = actor.hasShield;
-    for (const square of action.path ?? []) {
+    const actorOwner = ownerOf(actor);
+    for (const [index, square] of (action.path ?? []).entries()) {
       const piece = getPiece(state.board, square.r, square.c);
       if (
         !piece ||
@@ -748,10 +1069,21 @@ function pathEffectReport(state, action) {
         }
       }
       if (piece.type === PIECE_TYPES.DEATH) {
+        const deathOwner = ownerOf(piece);
+        const ownDeath = deathOwner === actorOwner;
         report.deathCount += 1;
+        if (ownDeath) report.ownDeathCount += 1;
+        else report.enemyDeathCount += 1;
+        if (action.mode === "knightRamp") {
+          report.knightDeathRampCount += 1;
+          if (ownDeath) report.ownKnightDeathRampCount += 1;
+          if (index > 0) report.lateKnightDeathRamp = true;
+        }
         if (hasShield) {
           hasShield = false;
           report.shieldLost = true;
+          if (ownDeath) report.ownDeathShieldLoss = true;
+          if (action.mode === "knightRamp") report.knightDeathShieldLoss = true;
         } else {
           report.diesAfterAction = true;
           return report;
@@ -772,8 +1104,13 @@ function pathEffectReport(state, action) {
 
 function pathEffectScore(report) {
   let score = 0;
-  if (report.shieldGained) score += 78;
-  if (report.shieldLost) score -= report.shieldValue + 38;
+  if (report.shieldGained) score += 68;
+  if (report.shieldLost) score -= report.shieldValue + 128;
+  if (report.ownDeathShieldLoss) score -= 92;
+  if (report.knightDeathShieldLoss) score -= 96;
+  if (report.lateKnightDeathRamp) score -= 116;
+  score -= report.ownKnightDeathRampCount * 142;
+  score -= report.knightDeathRampCount * 72;
   if (report.diesAfterAction) {
     const shieldDestroyedWithActor = report.shieldLost ? 0 : report.shieldValue;
     score -=
@@ -782,7 +1119,8 @@ function pathEffectScore(report) {
       (report.deathStaging || report.deathLanding ? 760 : 520);
   }
   score += report.lifeCount * 8;
-  score -= report.deathCount * 12;
+  score -= report.deathCount * 26;
+  score -= report.ownDeathCount * 34;
   return score;
 }
 
@@ -1341,7 +1679,7 @@ function shieldRepairMultiplier(state, target, targetOwner) {
   ) {
     return 1;
   }
-  if (canBeHealedByOwner(state, target, targetOwner)) return 0.48;
+  if (canBeHealedByOwner(state, target, targetOwner)) return 0.66;
 
   const alliedLifeCount = lifeCountForOwner(state, targetOwner);
   if (alliedLifeCount <= 0) return 1;
@@ -1358,6 +1696,10 @@ function lifeCountForOwner(state, color) {
     if (piece.type === PIECE_TYPES.LIFE && ownerOf(piece) === color) count += 1;
   }
   return count;
+}
+
+function sameSquare(a, b) {
+  return Boolean(a && b && a.r === b.r && a.c === b.c);
 }
 
 function canBeHealedByOwner(state, target, healerOwner) {
@@ -1415,10 +1757,15 @@ function exposureByTarget(attackerActions, defenderColor) {
   return exposure;
 }
 
-function pieceExposureRisk(state, pieceId, defenderColor) {
+function pieceExposureRisk(
+  state,
+  pieceId,
+  defenderColor,
+  settings = DEFAULT_OPTIONS,
+) {
   const attacker = oppositeColor(defenderColor);
   const exposure = exposureByTarget(
-    generateLegalActions(state, attacker, { respectTurn: false }),
+    legalActionsForSearch(state, attacker, settings, { respectTurn: false }),
     defenderColor,
   );
   return exposure.get(pieceId)?.risk ?? 0;
@@ -1492,11 +1839,19 @@ function stateKey(state, depth, color) {
   ].join("~");
 }
 
-function cacheValue(settings, key, value) {
+function cacheValue(settings, key, value, alphaStart, betaStart, bestActionId) {
   if (!settings.transposition) return;
   if (settings.transposition.size > settings.transpositionLimit)
     settings.transposition.clear();
-  settings.transposition.set(key, value);
+  const flag =
+    value <= alphaStart ? "upper" : value >= betaStart ? "lower" : "exact";
+  settings.transposition.set(key, { value, flag, bestActionId });
+}
+
+function cacheLimitedValue(cache, limit, key, value) {
+  if (!cache) return;
+  if (cache.size > limit) cache.clear();
+  cache.set(key, value);
 }
 
 function rootHeuristicWeight(depth) {

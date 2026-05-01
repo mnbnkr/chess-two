@@ -1337,7 +1337,8 @@
     transpositionLimit: 25000,
     timeLimitMs: 0,
     hardTimeLimitMs: 0,
-    depthStartMargin: 1.75
+    depthStartMargin: 1.75,
+    priorityOverflowLimit: 12
   };
   var LIFE_DEATH_STRATEGIC_VALUES = {
     [PIECE_TYPES.LIFE]: 460,
@@ -1536,7 +1537,10 @@
     const ordered = orderAiActions(state, sortActions(disciplinedActions.length > 0 ? disciplinedActions : actions), color, settings, context);
     const selected = ordered.slice(0, settings.maxActions);
     const selectedIds = new Set(selected.map((action) => action.id));
+    const priorityLimit = settings.maxActions + (settings.priorityOverflowLimit ?? 12);
     for (const action of ordered) {
+      if (selected.length >= priorityLimit)
+        break;
       if (!isPriorityAction(action, context) || selectedIds.has(action.id))
         continue;
       selected.push(action);
@@ -1580,7 +1584,8 @@
     }
     if (action.mode === "kill") {
       const targetValue = targetActionValue(action);
-      score += targetSign * (850 + targetValue * 2.4);
+      const shieldExecutionBonus = action.target?.hadShield ? 260 + shieldValueForType(action.target.type) * 1.4 : 0;
+      score += targetSign * (950 + targetValue * 2.7 + shieldExecutionBonus);
       if (targetOwner === color)
         score -= 900 + targetValue * 1.35;
     }
@@ -1637,6 +1642,7 @@
       score += intimidatedTargetTacticalBonus(action, color);
       score += shieldBreakTacticalBonus(after, actor, action, color);
       score += shieldTradeDiscipline(actor, action);
+      score -= missedDeathKillPenalty(before, action, color);
     }
     if (action.mode === "kill")
       score += deathKillTacticalBonus(action, color);
@@ -1766,7 +1772,37 @@
     if (ownerFromSnapshot(action.target) === color) {
       return -(1800 + targetValue * 1.4);
     }
-    return 320 + targetValue * 0.9;
+    const shieldExecutionBonus = action.target?.hadShield ? 240 + shieldValueForType(action.target.type) * 1.2 : 0;
+    return 420 + targetValue * 1.08 + shieldExecutionBonus;
+  }
+  function missedDeathKillPenalty(state, action, color) {
+    if (action.kind !== "attack" || !action.target?.hadShield || action.target?.type === PIECE_TYPES.KING) {
+      return 0;
+    }
+    let bestKillValue = 0;
+    let sameTargetKillValue = 0;
+    for (const candidate of generateLegalActions(state, color)) {
+      if (candidate.mode !== "kill")
+        continue;
+      if (ownerFromSnapshot(candidate.target) === color)
+        continue;
+      const transfer = lifeDeathTransferScore(state, candidate, color);
+      if (transfer < -900)
+        continue;
+      const annihilation = lifeDeathAnnihilationScore(state, candidate, color);
+      const killValue = targetActionValue(candidate) + deathKillTacticalBonus(candidate, color) + transfer + annihilation;
+      bestKillValue = Math.max(bestKillValue, killValue);
+      if (candidate.targetId === action.targetId) {
+        sameTargetKillValue = Math.max(sameTargetKillValue, killValue);
+      }
+    }
+    if (sameTargetKillValue > 0)
+      return 820 + sameTargetKillValue * 0.55;
+    const shieldBreakValue = shieldPressureValue(action.target);
+    if (bestKillValue > shieldBreakValue * 3) {
+      return Math.min(780, bestKillValue * 0.34);
+    }
+    return 0;
   }
   function healTacticalBonus(action, color) {
     if (action.mode !== "heal")
@@ -2505,6 +2541,7 @@
       this.actionHistoryLastKey = "";
       this.actionHistoryScrollEl = null;
       this.renderedPlayer = null;
+      this.boardRenderKey = "";
     }
     render(state2, view = {}) {
       this.renderBoard(state2, view);
@@ -2516,8 +2553,12 @@
       this.renderRules(view);
     }
     renderBoard(state2, view) {
-      this.boardEl.innerHTML = "";
       const highlights = view.highlights ?? emptyHighlights();
+      const nextBoardRenderKey = boardRenderKey(state2, view, highlights);
+      if (nextBoardRenderKey === this.boardRenderKey)
+        return;
+      this.boardRenderKey = nextBoardRenderKey;
+      this.boardEl.innerHTML = "";
       const rowOrder = orderedIndexes(view.boardSide);
       const colOrder = orderedIndexes(view.boardSide);
       for (const r of rowOrder) {
@@ -2812,8 +2853,13 @@
       classes.push("valid-death-ramp");
     if (highlights.attacks.has(key))
       classes.push("valid-attack");
-    if (highlights.specials.has(key))
+    if (highlights.specials.has(key)) {
       classes.push("valid-special");
+      if (view.selectedPiece?.type === PIECE_TYPES.LIFE)
+        classes.push("valid-life-special");
+      if (view.selectedPiece?.type === PIECE_TYPES.DEATH)
+        classes.push("valid-death-special");
+    }
     if (highlights.staging.has(key))
       classes.push("valid-staging");
     if (isResting)
@@ -2849,6 +2895,50 @@
   function orderedIndexes(boardSide = COLORS.WHITE) {
     const indexes = [...Array(BOARD_SIZE).keys()];
     return boardSide === COLORS.BLACK ? indexes.reverse() : indexes;
+  }
+  function boardRenderKey(state2, view, highlights) {
+    const pieceBits = [];
+    for (let r = 0;r < BOARD_SIZE; r++) {
+      for (let c = 0;c < BOARD_SIZE; c++) {
+        const piece = state2.board[r][c];
+        if (!piece)
+          continue;
+        pieceBits.push([
+          r,
+          c,
+          piece.id,
+          piece.type,
+          piece.color,
+          ownerOf(piece),
+          piece.hasShield ? 1 : 0,
+          piece.isImmune ? 1 : 0,
+          piece.isIntimidated ? 1 : 0,
+          piece.intimidationSuppressedShield ? 1 : 0,
+          state2.gameOver?.winner === piece.color && piece.type === "King" ? 1 : 0
+        ].join(":"));
+      }
+    }
+    return [
+      view.boardSide ?? COLORS.WHITE,
+      view.phase ?? "",
+      view.selectedPiece?.id ?? "",
+      view.selectedPiece?.type ?? "",
+      view.selectedPiece ? `${view.selectedPiece.row},${view.selectedPiece.col}` : "",
+      setKey(highlights.moves),
+      setKey(highlights.deathMoves),
+      setKey(highlights.rampMoves),
+      setKey(highlights.deathRampMoves),
+      setKey(highlights.attacks),
+      setKey(highlights.specials),
+      setKey(highlights.staging),
+      setKey(highlights.resting),
+      state2.gameOver?.winner ?? "",
+      state2.gameOver?.reason ?? "",
+      pieceBits.join("|")
+    ].join("~");
+  }
+  function setKey(values) {
+    return [...values ?? []].sort().join(";");
   }
   function describeAction(action) {
     const piece = action.pieceType ?? "Piece";
@@ -2957,6 +3047,7 @@
   var MOVE_EASING_X2 = 0.22;
   var MOVE_EASING_Y2 = 1;
   var NORMAL_MOVE_FINAL_OFFSET = 0.82;
+  var NORMAL_MOVE_STABLE_OFFSET = 0.86;
   var MIN_PATH_EVENT_DELAY = 42;
   function moveAnimationDurationForAction(action = null) {
     const hopCount = action?.mode === "knightRamp" ? Math.max(1, action.rampSequence?.length ?? 1) : 1;
@@ -3035,7 +3126,10 @@
             transform: `translate(${dx}px, ${dy}px) scale(1.05)`,
             filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))"
           },
-          { transform: "translate(0, 0) scale(0.98)", offset: 0.82 },
+          {
+            transform: "translate(0, 0) scale(1)",
+            offset: NORMAL_MOVE_STABLE_OFFSET
+          },
           {
             transform: "translate(0, 0) scale(1)",
             filter: "drop-shadow(0 0 0 rgba(0,0,0,0))"
@@ -3329,8 +3423,8 @@
         filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))"
       },
       {
-        offset: 0.82,
-        transform: transformForRect(to, finalRect, 0.98)
+        offset: NORMAL_MOVE_STABLE_OFFSET,
+        transform: transformForRect(to, finalRect, 1)
       },
       {
         offset: 1,
@@ -3612,13 +3706,15 @@
     5: {
       label: "Level 5",
       maxDepth: 7,
-      maxActions: 42,
-      maxTacticalActions: 18,
-      quiescenceDepth: 3,
-      tacticalWeight: 2.35,
-      thinkDelay: 15,
-      timeLimitMs: 2600,
-      hardTimeLimitMs: 4200
+      maxActions: 36,
+      maxTacticalActions: 14,
+      quiescenceDepth: 2,
+      tacticalWeight: 2.2,
+      priorityOverflowLimit: 10,
+      depthStartMargin: 2.25,
+      thinkDelay: 10,
+      timeLimitMs: 1500,
+      hardTimeLimitMs: 2400
     }
   };
   function loadSettings(storage = globalThis.localStorage) {

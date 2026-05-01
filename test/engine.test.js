@@ -24,6 +24,18 @@ function actionMatching(state, predicate) {
   return action;
 }
 
+const LEVEL_5_AI_OPTIONS = {
+  maxDepth: 7,
+  maxActions: 36,
+  maxTacticalActions: 14,
+  quiescenceDepth: 2,
+  tacticalWeight: 2.2,
+  priorityOverflowLimit: 10,
+  depthStartMargin: 2.25,
+  timeLimitMs: 1500,
+  hardTimeLimitMs: 2400,
+};
+
 test("initial setup follows the RULES board and shield rules", () => {
   const state = createGameState();
   expect(state.board).toHaveLength(10);
@@ -1397,19 +1409,56 @@ test("Level 5 AI removes a shieldless dark-square Bishop instead of only breakin
     ),
   ).toBe(true);
 
-  const action = chooseAiAction(state, COLORS.BLACK, {
-    maxDepth: 7,
-    maxActions: 42,
-    maxTacticalActions: 18,
-    quiescenceDepth: 3,
-    tacticalWeight: 2.35,
-    timeLimitMs: 2600,
-    hardTimeLimitMs: 4200,
-  });
+  const action = chooseAiAction(state, COLORS.BLACK, LEVEL_5_AI_OPTIONS);
 
   expect(action.pieceId).toBe("black-bishop");
   expect(action.kind).toBe("attack");
   expect(action.targetId).toBe("dark-bishop");
+});
+
+test("Level 5 AI spends the full turn on a safe Death kill over a Queen shield break", () => {
+  const state = createEmptyState(COLORS.BLACK);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 9, { id: "black-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 9, { id: "white-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 2, 2, { id: "death" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.QUEEN, COLORS.BLACK, 3, 0, { id: "queen" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 3, 3, { id: "pawn" }),
+  );
+
+  const queenShieldBreak = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "queen" &&
+      action.kind === "attack" &&
+      action.targetId === "pawn" &&
+      action.target.hadShield,
+  );
+  const deathKill = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "death" &&
+      action.mode === "kill" &&
+      action.targetId === "pawn",
+  );
+
+  const action = chooseAiAction(state, COLORS.BLACK, LEVEL_5_AI_OPTIONS);
+
+  expect(action.id).toBe(deathKill.id);
+  expect(action.id).not.toBe(queenShieldBreak.id);
 });
 
 test("AI evaluation gives light-square Bishops extra Life repair context", () => {
@@ -1482,15 +1531,7 @@ test("deep AI captures an intimidated checking Queen with a Bishop instead of on
     ),
   ).toBe(true);
 
-  const action = chooseAiAction(state, COLORS.BLACK, {
-    maxDepth: 7,
-    maxActions: 42,
-    maxTacticalActions: 18,
-    quiescenceDepth: 3,
-    tacticalWeight: 2.35,
-    timeLimitMs: 2600,
-    hardTimeLimitMs: 4200,
-  });
+  const action = chooseAiAction(state, COLORS.BLACK, LEVEL_5_AI_OPTIONS);
 
   expect(action.pieceId).toBe("black-bishop");
   expect(action.kind).toBe("attack");
@@ -1661,15 +1702,7 @@ test("AI refuses a non-terminal Death kill that hands Death across the ownership
   const afterHandoff = applyAction(state, handoffKill);
   expect(ownerOf(afterHandoff.board[5][5])).toBe(COLORS.WHITE);
 
-  const action = chooseAiAction(state, COLORS.BLACK, {
-    maxDepth: 7,
-    maxActions: 42,
-    maxTacticalActions: 18,
-    quiescenceDepth: 3,
-    tacticalWeight: 2.35,
-    timeLimitMs: 2600,
-    hardTimeLimitMs: 4200,
-  });
+  const action = chooseAiAction(state, COLORS.BLACK, LEVEL_5_AI_OPTIONS);
 
   expect(action.id).not.toBe(handoffKill.id);
 });
@@ -1705,10 +1738,11 @@ test("AI will not spend Death across the center line for an unshielded pawn", ()
   );
   const action = chooseAiAction(state, COLORS.BLACK, {
     maxDepth: 3,
-    maxActions: 42,
-    maxTacticalActions: 12,
+    maxActions: 36,
+    maxTacticalActions: 14,
     quiescenceDepth: 2,
-    tacticalWeight: 2.35,
+    tacticalWeight: 2.2,
+    priorityOverflowLimit: 10,
   });
 
   expect(action.id).not.toBe(handoffKill.id);
@@ -2100,13 +2134,8 @@ test("AI rejects fatal Death staging for a low-value shield break under tight pr
   expect(afterFatalBreak.board[2][3]?.hasShield).toBe(false);
 
   const action = chooseAiAction(state, COLORS.BLACK, {
-    maxDepth: 7,
+    ...LEVEL_5_AI_OPTIONS,
     maxActions: 4,
-    maxTacticalActions: 18,
-    quiescenceDepth: 3,
-    tacticalWeight: 2.35,
-    timeLimitMs: 2600,
-    hardTimeLimitMs: 4200,
   });
 
   expect(action.id).not.toBe(fatalShieldBreak.id);

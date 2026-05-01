@@ -25,6 +25,7 @@ const DEFAULT_OPTIONS = {
   timeLimitMs: 0,
   hardTimeLimitMs: 0,
   depthStartMargin: 1.75,
+  priorityOverflowLimit: 12,
 };
 
 const LIFE_DEATH_STRATEGIC_VALUES = {
@@ -322,7 +323,10 @@ function selectSearchActions(state, actions, color, settings) {
   );
   const selected = ordered.slice(0, settings.maxActions);
   const selectedIds = new Set(selected.map((action) => action.id));
+  const priorityLimit =
+    settings.maxActions + (settings.priorityOverflowLimit ?? 12);
   for (const action of ordered) {
+    if (selected.length >= priorityLimit) break;
     if (!isPriorityAction(action, context) || selectedIds.has(action.id))
       continue;
     selected.push(action);
@@ -384,7 +388,10 @@ function actionHeuristic(
   }
   if (action.mode === "kill") {
     const targetValue = targetActionValue(action);
-    score += targetSign * (850 + targetValue * 2.4);
+    const shieldExecutionBonus = action.target?.hadShield
+      ? 260 + shieldValueForType(action.target.type) * 1.4
+      : 0;
+    score += targetSign * (950 + targetValue * 2.7 + shieldExecutionBonus);
     if (targetOwner === color) score -= 900 + targetValue * 1.35;
   }
   if (action.mode === "heal") score += healActionValue(state, action, color);
@@ -452,6 +459,7 @@ function rootTacticalScore(before, after, action, color, settings) {
     score += intimidatedTargetTacticalBonus(action, color);
     score += shieldBreakTacticalBonus(after, actor, action, color);
     score += shieldTradeDiscipline(actor, action);
+    score -= missedDeathKillPenalty(before, action, color);
   }
   if (action.mode === "kill") score += deathKillTacticalBonus(action, color);
   if (action.mode === "heal") score += healTacticalBonus(action, color);
@@ -637,7 +645,46 @@ function deathKillTacticalBonus(action, color) {
   if (ownerFromSnapshot(action.target) === color) {
     return -(1800 + targetValue * 1.4);
   }
-  return 320 + targetValue * 0.9;
+  const shieldExecutionBonus = action.target?.hadShield
+    ? 240 + shieldValueForType(action.target.type) * 1.2
+    : 0;
+  return 420 + targetValue * 1.08 + shieldExecutionBonus;
+}
+
+function missedDeathKillPenalty(state, action, color) {
+  if (
+    action.kind !== "attack" ||
+    !action.target?.hadShield ||
+    action.target?.type === PIECE_TYPES.KING
+  ) {
+    return 0;
+  }
+
+  let bestKillValue = 0;
+  let sameTargetKillValue = 0;
+  for (const candidate of generateLegalActions(state, color)) {
+    if (candidate.mode !== "kill") continue;
+    if (ownerFromSnapshot(candidate.target) === color) continue;
+    const transfer = lifeDeathTransferScore(state, candidate, color);
+    if (transfer < -900) continue;
+    const annihilation = lifeDeathAnnihilationScore(state, candidate, color);
+    const killValue =
+      targetActionValue(candidate) +
+      deathKillTacticalBonus(candidate, color) +
+      transfer +
+      annihilation;
+    bestKillValue = Math.max(bestKillValue, killValue);
+    if (candidate.targetId === action.targetId) {
+      sameTargetKillValue = Math.max(sameTargetKillValue, killValue);
+    }
+  }
+
+  if (sameTargetKillValue > 0) return 820 + sameTargetKillValue * 0.55;
+  const shieldBreakValue = shieldPressureValue(action.target);
+  if (bestKillValue > shieldBreakValue * 3) {
+    return Math.min(780, bestKillValue * 0.34);
+  }
+  return 0;
 }
 
 function healTacticalBonus(action, color) {

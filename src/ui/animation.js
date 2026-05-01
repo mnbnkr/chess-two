@@ -23,6 +23,7 @@ const MOVE_EASING_Y1 = 0.82;
 const MOVE_EASING_X2 = 0.22;
 const MOVE_EASING_Y2 = 1;
 const NORMAL_MOVE_FINAL_OFFSET = 0.82;
+const NORMAL_MOVE_STABLE_OFFSET = 0.86;
 const MIN_PATH_EVENT_DELAY = 42;
 
 export function moveAnimationDurationForAction(action = null) {
@@ -140,7 +141,10 @@ export class BoardAnimator {
             transform: `translate(${dx}px, ${dy}px) scale(1.05)`,
             filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))",
           },
-          { transform: "translate(0, 0) scale(0.98)", offset: 0.82 },
+          {
+            transform: "translate(0, 0) scale(1)",
+            offset: NORMAL_MOVE_STABLE_OFFSET,
+          },
           {
             transform: "translate(0, 0) scale(1)",
             filter: "drop-shadow(0 0 0 rgba(0,0,0,0))",
@@ -515,8 +519,8 @@ function normalMoveKeyframes(from, to, finalRect) {
       filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))",
     },
     {
-      offset: 0.82,
-      transform: transformForRect(to, finalRect, 0.98),
+      offset: NORMAL_MOVE_STABLE_OFFSET,
+      transform: transformForRect(to, finalRect, 1),
     },
     {
       offset: 1,

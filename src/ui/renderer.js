@@ -48,6 +48,7 @@ export class Renderer {
     this.actionHistoryLastKey = "";
     this.actionHistoryScrollEl = null;
     this.renderedPlayer = null;
+    this.boardRenderKey = "";
   }
 
   render(state, view = {}) {
@@ -61,8 +62,12 @@ export class Renderer {
   }
 
   renderBoard(state, view) {
-    this.boardEl.innerHTML = "";
     const highlights = view.highlights ?? emptyHighlights();
+    const nextBoardRenderKey = boardRenderKey(state, view, highlights);
+    if (nextBoardRenderKey === this.boardRenderKey) return;
+
+    this.boardRenderKey = nextBoardRenderKey;
+    this.boardEl.innerHTML = "";
     const rowOrder = orderedIndexes(view.boardSide);
     const colOrder = orderedIndexes(view.boardSide);
 
@@ -412,7 +417,13 @@ function markerForSquare(row, col, view, highlights) {
   if (highlights.rampMoves?.has(key)) classes.push("valid-ramp");
   if (highlights.deathRampMoves?.has(key)) classes.push("valid-death-ramp");
   if (highlights.attacks.has(key)) classes.push("valid-attack");
-  if (highlights.specials.has(key)) classes.push("valid-special");
+  if (highlights.specials.has(key)) {
+    classes.push("valid-special");
+    if (view.selectedPiece?.type === PIECE_TYPES.LIFE)
+      classes.push("valid-life-special");
+    if (view.selectedPiece?.type === PIECE_TYPES.DEATH)
+      classes.push("valid-death-special");
+  }
   if (highlights.staging.has(key)) classes.push("valid-staging");
   if (isResting) classes.push("valid-resting");
   if (classes.length === 0) return null;
@@ -450,6 +461,58 @@ function squareLabel(row, col) {
 function orderedIndexes(boardSide = COLORS.WHITE) {
   const indexes = [...Array(BOARD_SIZE).keys()];
   return boardSide === COLORS.BLACK ? indexes.reverse() : indexes;
+}
+
+function boardRenderKey(state, view, highlights) {
+  const pieceBits = [];
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const piece = state.board[r][c];
+      if (!piece) continue;
+      pieceBits.push(
+        [
+          r,
+          c,
+          piece.id,
+          piece.type,
+          piece.color,
+          ownerOf(piece),
+          piece.hasShield ? 1 : 0,
+          piece.isImmune ? 1 : 0,
+          piece.isIntimidated ? 1 : 0,
+          piece.intimidationSuppressedShield ? 1 : 0,
+          state.gameOver?.winner === piece.color && piece.type === "King"
+            ? 1
+            : 0,
+        ].join(":"),
+      );
+    }
+  }
+
+  return [
+    view.boardSide ?? COLORS.WHITE,
+    view.phase ?? "",
+    view.selectedPiece?.id ?? "",
+    view.selectedPiece?.type ?? "",
+    view.selectedPiece
+      ? `${view.selectedPiece.row},${view.selectedPiece.col}`
+      : "",
+    setKey(highlights.moves),
+    setKey(highlights.deathMoves),
+    setKey(highlights.rampMoves),
+    setKey(highlights.deathRampMoves),
+    setKey(highlights.attacks),
+    setKey(highlights.specials),
+    setKey(highlights.staging),
+    setKey(highlights.resting),
+    state.gameOver?.winner ?? "",
+    state.gameOver?.reason ?? "",
+    pieceBits.join("|"),
+  ].join("~");
+}
+
+function setKey(values) {
+  return [...(values ?? [])].sort().join(";");
 }
 
 function describeAction(action) {

@@ -55,13 +55,15 @@ const AI_LEVELS = {
   5: {
     label: "Level 5",
     maxDepth: 7,
-    maxActions: 42,
-    maxTacticalActions: 18,
-    quiescenceDepth: 3,
-    tacticalWeight: 2.35,
-    thinkDelay: 15,
-    timeLimitMs: 2600,
-    hardTimeLimitMs: 4200,
+    maxActions: 36,
+    maxTacticalActions: 14,
+    quiescenceDepth: 2,
+    tacticalWeight: 2.2,
+    priorityOverflowLimit: 10,
+    depthStartMargin: 2.25,
+    thinkDelay: 10,
+    timeLimitMs: 1500,
+    hardTimeLimitMs: 2400,
   },
 };
 

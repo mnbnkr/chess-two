@@ -623,6 +623,71 @@ test("renderer distinguishes Death-only move and ramp highlights from safe previ
   globalThis.document = previousDocument;
 });
 
+test("renderer marks Life and Death special previews distinctly", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const board = new FakeElement("div");
+  const highlights = emptyHighlights();
+  highlights.specials.add("4,4");
+  const renderer = new Renderer({
+    boardEl: board,
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+
+  renderer.render(createGameState(), {
+    highlights,
+    selectedPiece: { id: "life", type: PIECE_TYPES.LIFE, row: 5, col: 5 },
+  });
+  expect(board.children[44].children[0].className).toContain(
+    "valid-life-special",
+  );
+
+  renderer.render(createGameState(), {
+    highlights,
+    selectedPiece: { id: "death", type: PIECE_TYPES.DEATH, row: 5, col: 5 },
+  });
+  expect(board.children[44].children[0].className).toContain(
+    "valid-death-special",
+  );
+
+  globalThis.document = previousDocument;
+});
+
+test("renderer preserves identical board DOM on status-only renders", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const board = new FakeElement("div");
+  const state = createGameState();
+  const renderer = new Renderer({
+    boardEl: board,
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+
+  renderer.render(state, {});
+  const firstSquare = board.children[0];
+  const firstPiece = firstSquare.children[0];
+  renderer.render(state, { isAiThinking: true });
+
+  expect(board.children[0]).toBe(firstSquare);
+  expect(board.children[0].children[0]).toBe(firstPiece);
+
+  globalThis.document = previousDocument;
+});
+
 test("renderer dims the selected origin during rest choice unless it is restable", () => {
   const previousDocument = globalThis.document;
   globalThis.document = {
@@ -1914,8 +1979,10 @@ test("settings persist and AI slider maps to stronger search options", () => {
   );
   expect(aiOptionsForLevel(4).timeLimitMs).toBe(1200);
   expect(aiOptionsForLevel(4).hardTimeLimitMs).toBe(2000);
-  expect(aiOptionsForLevel(5).timeLimitMs).toBe(2600);
-  expect(aiOptionsForLevel(5).hardTimeLimitMs).toBe(4200);
+  expect(aiOptionsForLevel(5).maxActions).toBe(36);
+  expect(aiOptionsForLevel(5).maxTacticalActions).toBe(14);
+  expect(aiOptionsForLevel(5).timeLimitMs).toBe(1500);
+  expect(aiOptionsForLevel(5).hardTimeLimitMs).toBe(2400);
   expect(aiOptionsForLevel(5).timeLimitMs).toBeGreaterThan(
     aiOptionsForLevel(4).timeLimitMs,
   );

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   COLORS,
   FILES,
@@ -7,6 +8,7 @@ import {
   createEmptyState,
   createGameState,
   createPiece,
+  generatePieceActions,
   generateLegalActions,
   placePiece,
 } from "../src/engine/index.js";
@@ -38,6 +40,7 @@ class FakeElement {
     this.checked = false;
     this.parent = null;
     this.listeners = {};
+    this.style = {};
     this.scrollTop = 0;
     this.scrollHeight = 0;
     this.clientHeight = 0;
@@ -288,6 +291,79 @@ test("renderer paints a 10x10 board and status without browser dependencies", ()
   expect(promotion.hidden).toBe(true);
 
   globalThis.document = previousDocument;
+});
+
+test("renderer places captured pieces above and below the right panel by board side", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const state = createGameState();
+  state.capturedPieces = [
+    {
+      id: "captured-black-queen",
+      type: PIECE_TYPES.QUEEN,
+      color: COLORS.BLACK,
+      owner: COLORS.BLACK,
+      moveNumber: 4,
+    },
+    {
+      id: "captured-white-pawn",
+      type: PIECE_TYPES.PAWN,
+      color: COLORS.WHITE,
+      owner: COLORS.WHITE,
+      moveNumber: 5,
+    },
+  ];
+  const top = new FakeElement("div");
+  const bottom = new FakeElement("div");
+  const renderer = new Renderer({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    capturedTopEl: top,
+    capturedBottomEl: bottom,
+  });
+
+  renderer.render(state, { boardSide: COLORS.WHITE });
+  expect(top.dataset.side).toBe(COLORS.BLACK);
+  expect(bottom.dataset.side).toBe(COLORS.WHITE);
+  expect(top.children[1].children[0].dataset.pieceId).toBe(
+    "captured-black-queen",
+  );
+  expect(bottom.children[1].children[0].dataset.pieceId).toBe(
+    "captured-white-pawn",
+  );
+
+  renderer.render(state, { boardSide: COLORS.BLACK });
+  expect(top.dataset.side).toBe(COLORS.WHITE);
+  expect(bottom.dataset.side).toBe(COLORS.BLACK);
+  expect(top.children[1].children[0].dataset.pieceId).toBe(
+    "captured-white-pawn",
+  );
+  expect(bottom.children[1].children[0].dataset.pieceId).toBe(
+    "captured-black-queen",
+  );
+
+  globalThis.document = previousDocument;
+});
+
+test("portrait captured trays anchor beside the panel and grow vertically", () => {
+  const css = readFileSync(new URL("../style.css", import.meta.url), "utf8");
+
+  expect(css).toContain(
+    "@media screen and (max-width: 1024px) and (orientation: portrait)",
+  );
+  expect(css).toContain("  #captured-top,\n  #captured-bottom {\n    top: 0;");
+  expect(css).toContain("    bottom: auto;\n  }");
+  expect(css).toContain("    height: auto;");
+  expect(css).toContain("    grid-auto-rows: auto;");
+  expect(css).toContain("    width: 100%;\n    gap: 0;");
+  expect(css).toContain("    align-items: center;");
 });
 
 test("renderer exposes promotion choices when promotion actions are pending", () => {
@@ -1895,6 +1971,117 @@ test("single Knight ramp keeps the ramp hop easing", () => {
   expect(animated.options.easing).toBe("cubic-bezier(.18,.82,.22,1)");
 });
 
+test("board animator uses board-level castling ghosts above board squares", () => {
+  const previousDocument = globalThis.document;
+  const appended = [];
+  const animations = [];
+  globalThis.document = {
+    createElement: (tagName) => {
+      const element = new FakeElement(tagName);
+      element.animate = (keyframes, options) => {
+        animations.push({ element, keyframes, options });
+        return { finished: new Promise(() => {}) };
+      };
+      element.remove = () => {
+        element.removed = true;
+      };
+      return element;
+    },
+  };
+
+  const kingSquare = new FakeElement("button");
+  const rookSquare = new FakeElement("button");
+  const kingClassList = new FakeElement("span").classList;
+  const rookClassList = new FakeElement("span").classList;
+  const pieces = [
+    {
+      dataset: { pieceId: "king" },
+      className: "piece black",
+      classList: kingClassList,
+      style: {},
+      getBoundingClientRect: () => ({
+        left: 70,
+        top: 90,
+        width: 10,
+        height: 10,
+      }),
+      closest: () => kingSquare,
+      animate: () => ({ finished: new Promise(() => {}) }),
+    },
+    {
+      dataset: { pieceId: "rook" },
+      className: "piece black",
+      classList: rookClassList,
+      style: {},
+      getBoundingClientRect: () => ({
+        left: 60,
+        top: 90,
+        width: 10,
+        height: 10,
+      }),
+      closest: () => rookSquare,
+      animate: () => ({ finished: new Promise(() => {}) }),
+    },
+  ];
+  const animator = new BoardAnimator({
+    querySelectorAll: (selector) =>
+      selector === "[data-piece-id]" ? pieces : [],
+    getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 100 }),
+    appendChild: (element) => {
+      appended.push(element);
+      return element;
+    },
+  });
+
+  animator.animateMovement(
+    {
+      pieces: new Map([
+        [
+          "king",
+          {
+            rect: { left: 50, top: 90, width: 10, height: 10 },
+            className: "piece black",
+          },
+        ],
+        [
+          "rook",
+          {
+            rect: { left: 80, top: 90, width: 10, height: 10 },
+            className: "piece black",
+          },
+        ],
+      ]),
+      squares: new Map(),
+      squarePieces: new Map(),
+    },
+    {
+      mode: "castle",
+      pieceId: "king",
+      rookId: "rook",
+      to: { r: 9, c: 7 },
+      rookTo: { r: 9, c: 6 },
+    },
+  );
+
+  expect(appended).toHaveLength(2);
+  expect(appended.every((element) => element.className.includes("castling-ghost"))).toBe(
+    true,
+  );
+  expect(animations).toHaveLength(2);
+  expect(pieces[0].style.visibility).toBe("hidden");
+  expect(pieces[1].style.visibility).toBe("hidden");
+  expect(kingSquare.style.zIndex).toBeUndefined();
+  expect(rookSquare.style.zIndex).toBeUndefined();
+  expect(animations[0].keyframes.at(-1).transform).toContain(
+    "translate(20px, 0px)",
+  );
+  expect(animations[1].keyframes.at(-1).transform).toContain(
+    "translate(-20px, 0px)",
+  );
+
+  globalThis.document = previousDocument;
+});
+
 test("board animator uses separate Life and Death move glow effects", () => {
   const previousDocument = globalThis.document;
   const appended = [];
@@ -2124,14 +2311,14 @@ test("renderer flips original c-file Knights, d-file Bishops, and black-owned Li
   globalThis.document = previousDocument;
 });
 
-test("renderer marks the surviving king after a king-destruction win", () => {
+test("renderer marks the winning king after checkmate", () => {
   const previousDocument = globalThis.document;
   globalThis.document = {
     createElement: (tagName) => new FakeElement(tagName),
   };
 
   const state = createGameState();
-  state.gameOver = { winner: "white", reason: "black king destroyed" };
+  state.gameOver = { winner: "white", reason: "black king checkmated" };
   const board = new FakeElement("div");
   const renderer = new Renderer({
     boardEl: board,
@@ -2266,6 +2453,67 @@ test("renderer keeps settings and rules controls interactive while AI thinks", (
   expect(settings.querySelector("#animations-enabled").disabled).toBe(false);
 
   globalThis.document = previousDocument;
+});
+
+test("controller blocks non-evasion standard moves while both kings are checked", () => {
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+  globalThis.localStorage = null;
+
+  const controller = new GameController({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+  controller.settings = {
+    aiLevel: 0,
+    animationsEnabled: false,
+    playerSide: "white",
+  };
+  controller.state = createEmptyState(COLORS.WHITE);
+  placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 5, { id: "white-king" }),
+  );
+  placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 0, { id: "black-king" }),
+  );
+  placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 0, 5, {
+      id: "black-checker",
+    }),
+  );
+  placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 0, 3, {
+      id: "white-checker",
+    }),
+  );
+  const pawn = placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 8, 9, { id: "white-pawn" }),
+  );
+  const stalePawnMove = generatePieceActions(controller.state, pawn)[0];
+
+  controller.selectPiece(pawn);
+  expect(controller.view.selectedPiece).toBe(null);
+
+  controller.commitAction(stalePawnMove);
+  expect(controller.state.currentPlayer).toBe(COLORS.WHITE);
+  expect(controller.state.board[8][9]?.id).toBe("white-pawn");
+  expect(controller.state.board[7][9]).toBe(null);
+  expect(controller.view.phaseInfo).toBe("That action is no longer legal.");
+
+  globalThis.document = previousDocument;
+  globalThis.localStorage = previousLocalStorage;
 });
 
 test("controller deselects a selected piece when its own square is clicked", () => {

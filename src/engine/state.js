@@ -70,6 +70,10 @@ export function cloneState(state, options = {}) {
       preserveHistory && state.actionHistory
         ? structuredClone(state.actionHistory)
         : [],
+    capturedPieces:
+      preserveHistory && state.capturedPieces
+        ? structuredClone(state.capturedPieces)
+        : [],
   };
 }
 
@@ -94,6 +98,7 @@ export function placePiece(board, piece) {
 
 export function removePiece(state, piece, removedByColor = null) {
   if (!piece) return;
+  recordCapturedPiece(state, piece, removedByColor);
   if (getPiece(state.board, piece.row, piece.col)?.id === piece.id) {
     setPiece(state.board, piece.row, piece.col, null);
   }
@@ -102,9 +107,23 @@ export function removePiece(state, piece, removedByColor = null) {
       winner:
         removedByColor ??
         (piece.color === COLORS.WHITE ? COLORS.BLACK : COLORS.WHITE),
-      reason: `${piece.color} king destroyed`,
+      reason: `${piece.color} king removed`,
     };
   }
+}
+
+function recordCapturedPiece(state, piece, removedByColor) {
+  state.capturedPieces ??= [];
+  if (state.capturedPieces.some((captured) => captured.id === piece.id))
+    return;
+  state.capturedPieces.push({
+    id: piece.id,
+    type: piece.type,
+    color: piece.color,
+    owner: ownerOf(piece),
+    removedByColor,
+    moveNumber: state.moveNumber,
+  });
 }
 
 export function movePiece(state, piece, toRow, toCol) {
@@ -217,6 +236,7 @@ export function createInitialState() {
     gameOver: null,
     lastAction: null,
     actionHistory: [],
+    capturedPieces: [],
   };
 }
 
@@ -230,5 +250,6 @@ export function createEmptyState(currentPlayer = COLORS.WHITE) {
     gameOver: null,
     lastAction: null,
     actionHistory: [],
+    capturedPieces: [],
   };
 }

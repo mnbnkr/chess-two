@@ -132,7 +132,20 @@ export class BoardAnimator {
           continue;
       }
 
+      if (
+        action?.mode === "castle" &&
+        (action.pieceId === pieceEl.dataset.pieceId ||
+          action.rookId === pieceEl.dataset.pieceId) &&
+        this.animateCastlingPiece(pieceEl, old)
+      ) {
+        continue;
+      }
+
       const squareEl = pieceEl.closest?.(".square");
+      const zIndexCleanup = raiseAnimatingSquare(
+        squareEl,
+        movementZIndexForAction(action, pieceEl.dataset.pieceId),
+      );
       squareEl?.classList.add("is-animating");
       pieceEl.classList.add("is-moving");
       const animation = pieceEl.animate(
@@ -157,6 +170,7 @@ export class BoardAnimator {
         },
       );
       const cleanup = () => {
+        zIndexCleanup?.();
         shieldCleanup?.();
         landingStatusCleanup?.();
         pieceEl.classList.remove("is-moving");
@@ -164,6 +178,51 @@ export class BoardAnimator {
       };
       animation.finished?.then(cleanup, cleanup);
     }
+  }
+
+  animateCastlingPiece(pieceEl, old) {
+    if (
+      !globalThis.document ||
+      !pieceEl.style ||
+      typeof pieceEl.animate !== "function"
+    )
+      return false;
+    const boardRect = this.boardEl.getBoundingClientRect?.();
+    const finalRect = pieceEl.getBoundingClientRect?.();
+    if (!boardRect || !finalRect) return false;
+
+    const ghost = globalThis.document.createElement("span");
+    ghost.className = `piece-ghost ${old.className} castling-ghost`;
+    setGhostContent(ghost, old);
+    ghost.style.left = `${old.rect.left - boardRect.left}px`;
+    ghost.style.top = `${old.rect.top - boardRect.top}px`;
+    ghost.style.width = `${old.rect.width}px`;
+    ghost.style.height = `${old.rect.height}px`;
+    this.boardEl.appendChild(ghost);
+
+    const previousVisibility = pieceEl.style.visibility;
+    pieceEl.style.visibility = "hidden";
+    pieceEl.classList.add("is-moving");
+
+    const animation = ghost.animate?.(
+      castlingGhostKeyframes(old.rect, finalRect),
+      {
+        duration: MOVE_DURATION,
+        easing: MOVE_EASING,
+        fill: "forwards",
+      },
+    );
+    const cleanup = () => {
+      ghost.remove?.();
+      pieceEl.style.visibility = previousVisibility;
+      pieceEl.classList.remove("is-moving");
+    };
+    if (animation?.finished) {
+      animation.finished.then(cleanup, cleanup);
+    } else {
+      globalThis.setTimeout?.(cleanup, MOVE_DURATION + 80);
+    }
+    return true;
   }
 
   preparePathShieldAnimation(pieceEl, old, action, previous) {
@@ -252,6 +311,10 @@ export class BoardAnimator {
       return true;
     }
 
+    const zIndexCleanup = raiseAnimatingSquare(
+      squareEl,
+      movementZIndexForAction(action, pieceEl.dataset.pieceId),
+    );
     squareEl?.classList.add("is-animating");
     pieceEl.classList.add("is-moving");
     const animation = pieceEl.animate(
@@ -263,6 +326,7 @@ export class BoardAnimator {
       },
     );
     const cleanup = () => {
+      zIndexCleanup?.();
       shieldCleanup?.();
       pieceEl.classList.remove("is-moving");
       squareEl?.classList.remove("is-animating");
@@ -279,10 +343,15 @@ export class BoardAnimator {
     shieldCleanup = null,
   ) {
     squareEl?.classList.add("is-animating");
+    const zIndexCleanup = raiseAnimatingSquare(
+      squareEl,
+      movementZIndexForAction({ mode: "knightRamp" }, pieceEl.dataset.pieceId),
+    );
     pieceEl.classList.add("is-moving");
     const animations = [];
     const cleanup = () => {
       for (const animation of animations) animation.cancel?.();
+      zIndexCleanup?.();
       shieldCleanup?.();
       pieceEl.classList.remove("is-moving");
       squareEl?.classList.remove("is-animating");
@@ -547,8 +616,44 @@ function doubleRampHopKeyframes(from, to, finalRect, isFinalHop) {
   ];
 }
 
+function castlingGhostKeyframes(from, to) {
+  const dx = to.left - from.left;
+  const dy = to.top - from.top;
+  const finalTransform = `translate(${dx}px, ${dy}px) scale(1)`;
+  return [
+    {
+      offset: 0,
+      transform: "translate(0, 0) scale(1.05)",
+      filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))",
+    },
+    {
+      offset: NORMAL_MOVE_STABLE_OFFSET,
+      transform: finalTransform,
+    },
+    {
+      offset: 1,
+      transform: finalTransform,
+      filter: "drop-shadow(0 0 0 rgba(0,0,0,0))",
+    },
+  ];
+}
+
 function transformForRect(rect, finalRect, scale) {
   return `translate(${rect.left - finalRect.left}px, ${rect.top - finalRect.top}px) scale(${scale})`;
+}
+
+function raiseAnimatingSquare(squareEl, zIndex) {
+  if (!squareEl?.style) return null;
+  const previous = squareEl.style.zIndex;
+  squareEl.style.zIndex = String(zIndex);
+  return () => {
+    squareEl.style.zIndex = previous;
+  };
+}
+
+function movementZIndexForAction(action, pieceId) {
+  if (action?.mode !== "castle") return 24;
+  return action.rookId === pieceId ? 28 : 30;
 }
 
 function landingStatusDelayForAction(action) {

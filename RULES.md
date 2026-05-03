@@ -39,7 +39,9 @@ A Life heal or Death kill consumes both the standard slot and the Life/Death slo
 
 If a player has no legal action in the remaining slots, the engine advances the turn. If neither player has any legal action, the game is a draw.
 
-If only the two Kings and any number of Life pieces remain, the game is a draw. Life pieces can repair Shields but cannot destroy a King by themselves, so they do not count as remaining destruction material.
+If only the two Kings and any number of Life pieces remain, the game is a draw. Life pieces can repair Shields but cannot force checkmate by themselves, so they do not count as remaining mating material.
+
+If a King is in check, that player's standard move for the turn must be a legal check evasion that ends with the King no longer in check. Legal evasions include moving the King, blocking the checking line, or removing the checking piece. The player may still make an ordinary Life/Death move before or after that check-evasion standard move if the Life/Death slot is available. Life heal and Death kill consume both slots, so they are illegal while the player is in check.
 
 ## Shields, Immunity, And Intimidation
 
@@ -53,8 +55,8 @@ If only the two Kings and any number of Life pieces remain, the game is a draw. 
 - An Intimidated checking piece loses its Shield while it continues to give check.
 - An Intimidated piece cannot gain a Shield from Life healing or Life pass-through.
 - Once that piece no longer gives check, its intimidation ends and its Shield is restored if the rules say it should return.
-- Check is status and intimidation only. It does not restrict legal moves and does not create checkmate.
-- Removing any King immediately wins the game for the opposing side.
+- Kings cannot be attacked as capture targets and cannot be killed by Death.
+- A checked King is checkmated when there is no legal check-evasion sequence, including after any available ordinary Life/Death move that may legally be made first, and the opposing side wins.
 
 ## Standard Piece Movement
 
@@ -65,7 +67,7 @@ Standard pieces use ordinary chess movement patterns unless changed here.
 - Standard pieces may move or attack through Life and Death pieces as if their squares were empty.
 - Passing through Life or Death triggers the matching pass-through effect.
 - A standard piece may not remain on a Life square after a normal move.
-- A standard piece may choose a Death-occupied square as the final square of a normal move; the Death piece remains, and the moving piece is removed immediately after the move resolves.
+- A non-King standard piece may choose a Death-occupied square as the final square of a normal move; the Death piece remains, and the moving piece is removed immediately after the move resolves.
 - Any successful attack counts as moving the attacker for first-move and castling tracking, even when the attacker was already adjacent to the target.
 
 ## Pawns
@@ -75,7 +77,7 @@ Standard pieces use ordinary chess movement patterns unless changed here.
 - Pawns can advance through Life and Death pieces as pass-through squares. Their final landing square must be empty unless it is a Death-occupied square chosen as a fatal final square.
 - Pawn attacks are diagonal and use the attack system.
 - Variant en passant is available only as the immediate standard reply. The eligible player may use a Life/Death action first, but the en passant right expires if that player takes any other standard action before using it. If a Pawn advanced multiple squares and crossed an enemy Pawn's diagonal attack square, that enemy Pawn may attack it. The crossed square is the staging square for a Shield break, or a pass-through square on a killing blow.
-- On the opponent's half of the board, a Pawn directly blocked by an enemy-controlled Life or Death piece may jump over it to the empty square immediately beyond it. The jumped Life/Death piece applies its pass-through effect.
+- A Pawn directly blocked by any Life or Death piece may jump over it to the empty square immediately beyond it from anywhere on the board, regardless of owner. The jumped Life/Death piece applies its pass-through effect.
 - Promotion is mandatory when a surviving Pawn ends on the far rank. The player chooses Queen, Rook, Bishop, or Knight.
 - A promoted piece inherits the Pawn's immunity and Shield state, except a promoted Queen is always unshielded.
 
@@ -106,7 +108,9 @@ Ramp rules:
 - Castling uses the nearest Rooks on the b-file and j-file of the 10x10 board.
 - The castling move consumes the standard move slot.
 - Use normal castling no-move and empty-path prerequisites unless this document overrides them.
-- Check is only intimidation/status in this variant. It does not create normal checkmate, check-evasion, or castling-through-check restrictions.
+- A King may not move into check.
+- Castling is illegal while the King is in check, through a checked transit square, or onto a checked destination square.
+- While in check, the standard slot may only be spent on a legal check evasion. Other standard pieces can move only if they block the check or remove the checking piece, and Life heal or Death kill cannot be used.
 
 ## Life And Death
 
@@ -131,7 +135,7 @@ Special actions:
 - Life heal targets an adjacent diagonal piece on a light square, friendly or enemy.
 - The Life heal target must be shieldless, able to have a Shield, not immune, and not Intimidated.
 - Life heal gives the target a Shield and one-turn immunity.
-- Death kill targets an adjacent diagonal piece on a dark square, friendly or enemy.
+- Death kill targets an adjacent diagonal non-King piece on a dark square, friendly or enemy.
 - The Death kill target must not be immune and must not be another Death piece.
 - Death kill is blocked if the target has an allied protector orthogonally adjacent to it.
 - Death moves onto the target square and destroys the target.
@@ -144,6 +148,7 @@ To attack, a player selects a piece and then an enemy target that lies on that p
 
 General attack rules:
 
+- Kings are checked by attack geometry but are never legal attack targets.
 - A Shield break needs a valid staging square.
 - A staging square is usually an empty square adjacent to the target that the attacker can use to deliver the Shield break.
 - A Death-occupied square can also be chosen as a Shield-break staging square; this is always fatal to the attacker after the attack resolves.
@@ -198,7 +203,7 @@ The AI must reason over Chess Two legality, not normal chess capture rules. In p
 - Shields as second-life material: cheap attacks that remove Shields from valuable pieces are often real tactical gains, unless Life can promptly repair them.
 - Death pass-through and Death-staging attacks resolving before attacker removal.
 - Life/Death ownership transfer by board half.
-- King destruction as the terminal win condition.
+- Check, check-evasion, castling-through-check, and checkmate.
 - Draw/no-move safety.
 
 The rule source of truth is this document, followed by the engine tests.

@@ -41,6 +41,8 @@ export class GameController {
     controlsEl,
     settingsEl,
     rulesEl,
+    capturedTopEl,
+    capturedBottomEl,
   }) {
     this.renderer = new Renderer({
       boardEl,
@@ -50,6 +52,8 @@ export class GameController {
       controlsEl,
       settingsEl,
       rulesEl,
+      capturedTopEl,
+      capturedBottomEl,
     });
     this.animator = new BoardAnimator(boardEl);
     this.state = createGameState();
@@ -392,6 +396,12 @@ export class GameController {
   }
 
   commitAction(action) {
+    if (!isCurrentLegalAction(this.state, action)) {
+      this.clearSelection();
+      this.view.phaseInfo = "That action is no longer legal.";
+      this.render();
+      return;
+    }
     this.rememberUndoAnchor();
     const previous = this.animator.snapshot();
     this.state = applyAction(this.state, action);
@@ -825,4 +835,11 @@ function turnUndoKey(state) {
 
 export function legalActionSummary(state) {
   return generateLegalActions(state).map((action) => action.id);
+}
+
+function isCurrentLegalAction(state, action) {
+  if (!action?.id) return false;
+  return generateLegalActions(state).some(
+    (candidate) => candidate.id === action.id,
+  );
 }

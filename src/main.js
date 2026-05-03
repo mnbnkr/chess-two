@@ -9,6 +9,8 @@ function startChessTwo() {
     controlsEl: document.querySelector("#turn-controls"),
     settingsEl: document.querySelector("#settings-panel"),
     rulesEl: document.querySelector("#rules-panel"),
+    capturedTopEl: document.querySelector("#captured-top"),
+    capturedBottomEl: document.querySelector("#captured-bottom"),
   });
 }
 

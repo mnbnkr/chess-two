@@ -25,6 +25,16 @@ const PERMANENTLY_FLIPPED_PIECE_IDS = new Set([
   "white-knight-2",
   "white-bishop-3",
 ]);
+const CAPTURED_ORDER = [
+  PIECE_TYPES.QUEEN,
+  PIECE_TYPES.ROOK,
+  PIECE_TYPES.BISHOP,
+  PIECE_TYPES.KNIGHT,
+  PIECE_TYPES.PAWN,
+  PIECE_TYPES.LIFE,
+  PIECE_TYPES.DEATH,
+  PIECE_TYPES.KING,
+];
 
 export class Renderer {
   constructor({
@@ -35,6 +45,8 @@ export class Renderer {
     controlsEl,
     settingsEl,
     rulesEl,
+    capturedTopEl,
+    capturedBottomEl,
   }) {
     this.boardEl = boardEl;
     this.coordinateEl = coordinateEl;
@@ -43,6 +55,8 @@ export class Renderer {
     this.controlsEl = controlsEl;
     this.settingsEl = settingsEl;
     this.rulesEl = rulesEl;
+    this.capturedTopEl = capturedTopEl;
+    this.capturedBottomEl = capturedBottomEl;
     this.actionHistoryRef = null;
     this.actionHistoryLength = -1;
     this.actionHistoryLastKey = "";
@@ -59,6 +73,7 @@ export class Renderer {
     this.renderPromotion(view);
     this.renderSettings(view);
     this.renderRules(view);
+    this.renderCapturedPieces(state, view);
   }
 
   renderBoard(state, view) {
@@ -324,6 +339,17 @@ export class Renderer {
     if (!this.rulesEl) return;
     this.rulesEl.hidden = !view.rulesOpen;
   }
+
+  renderCapturedPieces(state, view) {
+    if (!this.capturedTopEl && !this.capturedBottomEl) return;
+    const topColor =
+      (view.boardSide ?? COLORS.WHITE) === COLORS.BLACK
+        ? COLORS.WHITE
+        : COLORS.BLACK;
+    const bottomColor = topColor === COLORS.WHITE ? COLORS.BLACK : COLORS.WHITE;
+    renderCapturedTray(this.capturedTopEl, state, topColor, "top");
+    renderCapturedTray(this.capturedBottomEl, state, bottomColor, "bottom");
+  }
 }
 
 function renderPiece(piece, state) {
@@ -461,6 +487,55 @@ function squareLabel(row, col) {
 function orderedIndexes(boardSide = COLORS.WHITE) {
   const indexes = [...Array(BOARD_SIZE).keys()];
   return boardSide === COLORS.BLACK ? indexes.reverse() : indexes;
+}
+
+function renderCapturedTray(container, state, color, position) {
+  if (!container) return;
+  container.innerHTML = "";
+  container.dataset.side = color;
+  container.dataset.position = position;
+  container.setAttribute("aria-label", `${playerName(color)} captured pieces`);
+
+  const label = document.createElement("span");
+  label.className = "captured-label";
+  label.textContent = playerName(color);
+  container.appendChild(label);
+
+  const list = document.createElement("div");
+  list.className = "captured-piece-list";
+  const captured = capturedPiecesForColor(state, color);
+  for (const piece of captured) {
+    list.appendChild(renderCapturedPiece(piece));
+  }
+  container.classList.toggle("is-empty", captured.length === 0);
+  container.appendChild(list);
+}
+
+function renderCapturedPiece(piece) {
+  const pieceEl = document.createElement("span");
+  pieceEl.className = `captured-piece ${piece.color} ${pieceAssetClass(piece)}`;
+  pieceEl.dataset.pieceId = piece.id;
+  pieceEl.dataset.type = piece.type;
+  pieceEl.title = `${piece.color} ${piece.type}`;
+
+  const image = document.createElement("img");
+  image.src = pieceAssetPath(piece);
+  image.alt = "";
+  image.decoding = "async";
+  image.draggable = false;
+  pieceEl.appendChild(image);
+  return pieceEl;
+}
+
+function capturedPiecesForColor(state, color) {
+  return [...(state.capturedPieces ?? [])]
+    .filter((piece) => (piece.owner ?? piece.color) === color)
+    .sort(
+      (a, b) =>
+        CAPTURED_ORDER.indexOf(a.type) - CAPTURED_ORDER.indexOf(b.type) ||
+        (a.moveNumber ?? 0) - (b.moveNumber ?? 0) ||
+        a.id.localeCompare(b.id),
+    );
 }
 
 function boardRenderKey(state, view, highlights) {

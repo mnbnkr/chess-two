@@ -95,7 +95,8 @@
       } : null,
       gameOver: state.gameOver ? { ...state.gameOver } : null,
       lastAction: preserveHistory && state.lastAction ? structuredClone(state.lastAction) : null,
-      actionHistory: preserveHistory && state.actionHistory ? structuredClone(state.actionHistory) : []
+      actionHistory: preserveHistory && state.actionHistory ? structuredClone(state.actionHistory) : [],
+      capturedPieces: preserveHistory && state.capturedPieces ? structuredClone(state.capturedPieces) : []
     };
   }
   function getPiece(board, row, col) {
@@ -115,15 +116,29 @@
   function removePiece(state, piece, removedByColor = null) {
     if (!piece)
       return;
+    recordCapturedPiece(state, piece, removedByColor);
     if (getPiece(state.board, piece.row, piece.col)?.id === piece.id) {
       setPiece(state.board, piece.row, piece.col, null);
     }
     if (piece.type === PIECE_TYPES.KING && !state.gameOver) {
       state.gameOver = {
         winner: removedByColor ?? (piece.color === COLORS.WHITE ? COLORS.BLACK : COLORS.WHITE),
-        reason: `${piece.color} king destroyed`
+        reason: `${piece.color} king removed`
       };
     }
+  }
+  function recordCapturedPiece(state, piece, removedByColor) {
+    state.capturedPieces ??= [];
+    if (state.capturedPieces.some((captured) => captured.id === piece.id))
+      return;
+    state.capturedPieces.push({
+      id: piece.id,
+      type: piece.type,
+      color: piece.color,
+      owner: ownerOf(piece),
+      removedByColor,
+      moveNumber: state.moveNumber
+    });
   }
   function movePiece(state, piece, toRow, toCol) {
     setPiece(state.board, piece.row, piece.col, null);
@@ -208,6 +223,7 @@
   }
   function generateLegalActions(state, color = state.currentPlayer, options = {}) {
     const respectTurn = options.respectTurn ?? true;
+    const respectCheck = options.respectCheck ?? true;
     if (state.gameOver)
       return [];
     if (respectTurn && color !== state.currentPlayer)
@@ -218,10 +234,11 @@
         continue;
       actions.push(...generatePieceActions(state, piece, { respectTurn }));
     }
-    if (respectTurn && options.includeSkip !== false && canSkipSpecialMoveFromActions(state, color, actions)) {
-      actions.push(buildSkipSpecialAction(state, color));
+    const legalActions = respectCheck ? filterCheckLegalActions(state, color, actions) : actions;
+    if (respectTurn && options.includeSkip !== false && canSkipSpecialMoveFromActions(state, color, legalActions)) {
+      legalActions.push(buildSkipSpecialAction(state, color));
     }
-    return sortActions(actions);
+    return sortActions(legalActions);
   }
   function generatePieceActions(state, piece, options = {}) {
     const respectTurn = options.respectTurn ?? true;
@@ -257,9 +274,67 @@
   function canSkipSpecialMoveFromActions(state, color, actions) {
     if (state.gameOver || state.currentPlayer !== color)
       return false;
+    if (isKingInCheck(state, color))
+      return false;
     if (!state.turn.standardMoveMade || state.turn.specialMoveMade)
       return false;
     return actions.some((action) => action.consumes?.special);
+  }
+  function filterCheckLegalActions(state, color, actions) {
+    const inCheck = isKingInCheck(state, color);
+    if (inCheck && !hasLegalCheckEvasionSequence(state, color, actions))
+      return [];
+    return actions.filter((action) => isActionLegalRegardingCheck(state, color, action, inCheck));
+  }
+  function isActionLegalRegardingCheck(state, color, action, inCheck) {
+    if (action.target?.type === PIECE_TYPES.KING)
+      return false;
+    if (inCheck) {
+      if (isPreparatoryLifeDeathMove(state, action))
+        return preparatoryLifeDeathMoveAllowsCheckEvasion(state, color, action);
+      if (action.mode === "castle")
+        return false;
+      if (!isStandardCheckEvasionAction(action))
+        return false;
+      return !actionLeavesKingInCheck(state, action, color);
+    }
+    if (action.mode === "castle" && castlingCrossesCheck(state, action, color))
+      return false;
+    if (action.consumes?.standard)
+      return !actionLeavesKingInCheck(state, action, color);
+    if (action.consumes?.special && state.turn.standardMoveMade)
+      return !actionLeavesKingInCheck(state, action, color);
+    return true;
+  }
+  function actionLeavesKingInCheck(state, action, color) {
+    const next = applyAction(state, action, {
+      recordHistory: false,
+      normalize: false
+    });
+    return isKingInCheck(next, color);
+  }
+  function castlingCrossesCheck(state, action, color) {
+    if (action.mode !== "castle")
+      return false;
+    const king = findPieceById(state, action.pieceId);
+    if (!king)
+      return true;
+    const direction = Math.sign(action.to.c - action.from.c);
+    const kingPath = [
+      { r: action.from.r, c: action.from.c },
+      { r: action.from.r, c: action.from.c + direction },
+      { r: action.to.r, c: action.to.c }
+    ];
+    return kingPath.some((square) => isKingInCheckAt(state, king, square));
+  }
+  function isKingInCheckAt(state, king, square) {
+    const probe = cloneState(state, { preserveHistory: false });
+    const probeKing = findPieceById(probe, king.id);
+    if (!probeKing)
+      return true;
+    setPiece(probe.board, probeKing.row, probeKing.col, null);
+    setPiece(probe.board, square.r, square.c, probeKing);
+    return isKingInCheck(probe, king.color);
   }
   function generateStandardMoves(state, piece) {
     switch (piece.type) {
@@ -318,8 +393,7 @@
     }
     const jumpTo = { r: piece.row + dir * 2, c: piece.col };
     const jumped = getPiece(state.board, piece.row + dir, piece.col);
-    const onOpponentSide = piece.color === COLORS.WHITE && piece.row <= 4 || piece.color === COLORS.BLACK && piece.row >= 5;
-    if (onOpponentSide && jumped && LIFE_DEATH_PIECES.has(jumped.type) && ownerOf(jumped) !== ownerOf(piece) && isValidSquare(jumpTo.r, jumpTo.c) && !getPiece(state.board, jumpTo.r, jumpTo.c)) {
+    if (jumped && LIFE_DEATH_PIECES.has(jumped.type) && isValidSquare(jumpTo.r, jumpTo.c) && !getPiece(state.board, jumpTo.r, jumpTo.c)) {
       actions.push(...promotionVariants(state, piece, {
         kind: "move",
         mode: "pawnLifeDeathJump",
@@ -402,8 +476,9 @@
         if (!isValidSquare(to.r, to.c))
           continue;
         const occupant = getPiece(state.board, to.r, to.c);
-        const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
-        if (occupant && !deathLanding)
+        if (occupant?.type === PIECE_TYPES.DEATH)
+          continue;
+        if (occupant)
           continue;
         actions.push(withActionId({
           kind: "move",
@@ -413,7 +488,7 @@
           from: { r: piece.row, c: piece.col },
           to,
           path: [],
-          deathLanding,
+          deathLanding: false,
           consumes: { standard: true, special: false }
         }));
       }
@@ -534,31 +609,31 @@
     }
     return actions;
   }
-  function generateStandardAttacks(state, piece) {
+  function generateStandardAttacks(state, piece, options = {}) {
     if (piece.type === PIECE_TYPES.PAWN) {
       return [
-        ...generatePawnAttacks(state, piece),
+        ...generatePawnAttacks(state, piece, options),
         ...generateEnPassantActions(state, piece)
       ];
     }
     if (piece.type === PIECE_TYPES.KING)
-      return generateKingAttacks(state, piece);
+      return generateKingAttacks(state, piece, options);
     if (piece.type === PIECE_TYPES.KNIGHT)
-      return generateKnightAttacks(state, piece);
+      return generateKnightAttacks(state, piece, options);
     if (piece.type === PIECE_TYPES.ROOK)
-      return generateSlidingAttacks(state, piece, ROOK_DIRS);
+      return generateSlidingAttacks(state, piece, ROOK_DIRS, options);
     if (piece.type === PIECE_TYPES.BISHOP)
-      return generateSlidingAttacks(state, piece, BISHOP_DIRS);
+      return generateSlidingAttacks(state, piece, BISHOP_DIRS, options);
     if (piece.type === PIECE_TYPES.QUEEN)
-      return generateSlidingAttacks(state, piece, [...ROOK_DIRS, ...BISHOP_DIRS]);
+      return generateSlidingAttacks(state, piece, [...ROOK_DIRS, ...BISHOP_DIRS], options);
     return [];
   }
-  function generatePawnAttacks(state, piece) {
+  function generatePawnAttacks(state, piece, options = {}) {
     const actions = [];
     const dir = pawnDirection(piece);
     for (const dc of [-1, 1]) {
       const target = getPiece(state.board, piece.row + dir, piece.col + dc);
-      if (!isAttackTarget(piece, target))
+      if (!isAttackTarget(piece, target, options))
         continue;
       actions.push(...buildAttackActions(state, piece, target, {
         r: piece.row,
@@ -593,14 +668,14 @@
     }
     return actions;
   }
-  function generateKingAttacks(state, piece) {
+  function generateKingAttacks(state, piece, options = {}) {
     const actions = [];
     for (let dr = -1;dr <= 1; dr++) {
       for (let dc = -1;dc <= 1; dc++) {
         if (dr === 0 && dc === 0)
           continue;
         const target = getPiece(state.board, piece.row + dr, piece.col + dc);
-        if (!isAttackTarget(piece, target))
+        if (!isAttackTarget(piece, target, options))
           continue;
         actions.push(...buildAttackActions(state, piece, target, {
           r: piece.row,
@@ -613,11 +688,11 @@
     }
     return actions;
   }
-  function generateKnightAttacks(state, piece) {
+  function generateKnightAttacks(state, piece, options = {}) {
     const actions = [];
     for (const [dr, dc] of KNIGHT_DELTAS) {
       const target = getPiece(state.board, piece.row + dr, piece.col + dc);
-      if (!isAttackTarget(piece, target))
+      if (!isAttackTarget(piece, target, options))
         continue;
       if (!target.hasShield) {
         actions.push(...buildAttackActions(state, piece, target, {
@@ -638,7 +713,7 @@
     }
     return actions;
   }
-  function generateSlidingAttacks(state, piece, directions) {
+  function generateSlidingAttacks(state, piece, directions, options = {}) {
     const actions = [];
     for (const [dr, dc] of directions) {
       for (let distance = 1;distance < BOARD_SIZE; distance++) {
@@ -647,7 +722,7 @@
           continue;
         if (LIFE_DEATH_PIECES.has(target.type))
           continue;
-        if (!isAttackTarget(piece, target))
+        if (!isAttackTarget(piece, target, options))
           break;
         const staging = {
           r: target.row - dr,
@@ -672,10 +747,12 @@
     }
     return actions;
   }
-  function isAttackTarget(attacker, target) {
+  function isAttackTarget(attacker, target, options = {}) {
     if (!target || target.isImmune)
       return false;
     if (LIFE_DEATH_PIECES.has(target.type))
+      return false;
+    if (target.type === PIECE_TYPES.KING && !options.allowKingTarget)
       return false;
     return ownerOf(target) !== ownerOf(attacker);
   }
@@ -838,7 +915,7 @@
       const target = getPiece(state.board, piece.row + dr, piece.col + dc);
       if (!target || target.isImmune || !isDarkSquare(target.row, target.col))
         continue;
-      if (target.type === PIECE_TYPES.DEATH)
+      if (target.type === PIECE_TYPES.KING || target.type === PIECE_TYPES.DEATH)
         continue;
       if (isProtectedFromDeath(target, state))
         continue;
@@ -873,6 +950,7 @@
   }
   function applyAction(state, action, options = {}) {
     const recordHistoryEntry = options.recordHistory ?? true;
+    const normalizeAfterAction = options.normalize ?? true;
     const next = cloneState(state, { preserveHistory: recordHistoryEntry });
     if (next.gameOver)
       return next;
@@ -896,9 +974,11 @@
     updateEnPassant(next, action, previousEnPassant, actorColor);
     checkForAnnihilation(next);
     checkForMaterialDraw(next);
-    if (!next.gameOver)
-      updateIntimidation(next);
-    normalizeTurn(next);
+    if (normalizeAfterAction) {
+      if (!next.gameOver)
+        updateIntimidation(next);
+      normalizeTurn(next);
+    }
     return next;
   }
   function applyMoveAction(state, action) {
@@ -931,6 +1011,8 @@
     const target = findPieceById(state, action.targetId);
     if (!attacker || !target || target.isImmune)
       return;
+    if (target.type === PIECE_TYPES.KING)
+      return;
     const attackerFrom = { r: attacker.row, c: attacker.col };
     const diesAfterAttack = applyPathEffects(state, attacker, action.path ?? []) || action.deathStaging;
     setPiece(state.board, attackerFrom.r, attackerFrom.c, null);
@@ -939,7 +1021,7 @@
     if (targetHadShield) {
       target.hasShield = false;
     } else {
-      removePiece(state, target);
+      removePiece(state, target, ownerOf(attacker));
     }
     const finalSquare = targetHadShield ? action.staging : action.rest;
     if (diesAfterAttack) {
@@ -962,8 +1044,8 @@
       }
       return;
     }
-    if (action.mode === "kill" && !target.isImmune && target.type !== PIECE_TYPES.DEATH && isDarkSquare(target.row, target.col) && !isProtectedFromDeath(target, state)) {
-      removePiece(state, target);
+    if (action.mode === "kill" && !target.isImmune && target.type !== PIECE_TYPES.KING && target.type !== PIECE_TYPES.DEATH && isDarkSquare(target.row, target.col) && !isProtectedFromDeath(target, state)) {
+      removePiece(state, target, ownerOf(piece));
       setPiece(state.board, piece.row, piece.col, null);
       setPiece(state.board, action.to.r, action.to.c, piece);
       piece.hasMoved = true;
@@ -1028,6 +1110,10 @@
     checkForMaterialDraw(state);
     if (state.gameOver)
       return state;
+    if (applyCheckmateResult(state, state.currentPlayer))
+      return state;
+    if (applyCheckmateResult(state, oppositeColor(state.currentPlayer)))
+      return state;
     let skipped = 0;
     while (!state.gameOver && generateLegalActions(state).length === 0) {
       skipped += 1;
@@ -1039,8 +1125,21 @@
         break;
       }
       switchTurn(state);
+      if (applyCheckmateResult(state, state.currentPlayer))
+        break;
+      if (applyCheckmateResult(state, oppositeColor(state.currentPlayer)))
+        break;
     }
     return state;
+  }
+  function applyCheckmateResult(state, loser) {
+    if (!isCheckmate(state, loser))
+      return false;
+    state.gameOver = {
+      winner: oppositeColor(loser),
+      reason: `${loser} king checkmated`
+    };
+    return true;
   }
   function switchTurn(state) {
     const previousPlayer = state.currentPlayer;
@@ -1127,6 +1226,57 @@
       }
     }
   }
+  function isKingInCheck(state, color) {
+    const king = findKing(state, color);
+    if (!king)
+      return false;
+    return allPieces(state).some((piece) => ownerOf(piece) !== color && attacksKing(state, piece, king));
+  }
+  function isCheckmate(state, color = state.currentPlayer) {
+    if (!isKingInCheck(state, color))
+      return false;
+    return !hasLegalCheckEvasionSequence(checkmateProbeState(state, color), color);
+  }
+  function checkmateProbeState(state, color) {
+    if (state.currentPlayer === color)
+      return state;
+    const probe = cloneState(state, { preserveHistory: false });
+    probe.currentPlayer = color;
+    probe.turn = { standardMoveMade: false, specialMoveMade: false };
+    return probe;
+  }
+  function hasLegalCheckEvasionSequence(state, color, actions = null) {
+    if (legalStandardCheckEvasionActions(state, color).length > 0)
+      return true;
+    return preparatoryLifeDeathActions(state, color, actions).some((action) => preparatoryLifeDeathMoveAllowsCheckEvasion(state, color, action));
+  }
+  function legalStandardCheckEvasionActions(state, color) {
+    const king = findKing(state, color);
+    if (!king)
+      return [];
+    return allPieces(state).filter((piece) => ownerOf(piece) === color).flatMap((piece) => generatePieceActions(state, piece)).filter((action) => isStandardCheckEvasionAction(action) && !actionLeavesKingInCheck(state, action, color));
+  }
+  function isStandardCheckEvasionAction(action) {
+    return action.consumes?.standard && !action.consumes?.special && action.mode !== "castle";
+  }
+  function preparatoryLifeDeathActions(state, color, actions = null) {
+    if (state.currentPlayer !== color)
+      return [];
+    if (state.turn.standardMoveMade || state.turn.specialMoveMade)
+      return [];
+    const candidates = actions ?? allPieces(state).flatMap((piece) => ownerOf(piece) === color ? generatePieceActions(state, piece) : []);
+    return candidates.filter((action) => isPreparatoryLifeDeathMove(state, action));
+  }
+  function isPreparatoryLifeDeathMove(state, action) {
+    return action.mode === "lifeDeathMove" && !state.turn.standardMoveMade && action.consumes?.special && !action.consumes?.standard;
+  }
+  function preparatoryLifeDeathMoveAllowsCheckEvasion(state, color, action) {
+    const next = applyAction(state, action, {
+      recordHistory: false,
+      normalize: false
+    });
+    return legalStandardCheckEvasionActions(next, color).length > 0;
+  }
   function clearIntimidation(state) {
     for (const piece of allPieces(state)) {
       if (!piece.isIntimidated)
@@ -1140,7 +1290,7 @@
   function attacksKing(state, piece, king) {
     if (!STANDARD_PIECES.has(piece.type))
       return false;
-    return generateStandardAttacks(state, piece).some((action) => action.targetId === king.id);
+    return generateStandardAttacks(state, piece, { allowKingTarget: true }).some((action) => action.targetId === king.id);
   }
   function findKing(state, color) {
     return allPieces(state).find((piece) => piece.type === PIECE_TYPES.KING && piece.color === color) ?? null;
@@ -1228,6 +1378,7 @@
     [PIECE_TYPES.LIFE]: 460,
     [PIECE_TYPES.DEATH]: 760
   };
+  var KING_CAPTURE_THREAT_VALUE = 140000;
   function chooseAiAction(state, color = "black", options = {}) {
     const settings = { ...DEFAULT_OPTIONS, ...options };
     settings.transposition = new Map;
@@ -1238,6 +1389,9 @@
     settings.deadline = hardDeadline(settings);
     settings.timedOut = false;
     const legalRootActions = legalActionsForSearch(state, color, settings);
+    const kingThreatTactic = findImmediateKingThreatTactic(state, legalRootActions, color, settings);
+    if (kingThreatTactic?.forceImmediate)
+      return kingThreatTactic.action;
     const rootTactics = findRootTactics(state, legalRootActions, color, settings);
     const dominantTactic = rootTactics[0] ?? null;
     if (dominantTactic?.forceImmediate)
@@ -1468,6 +1622,36 @@
     }
     return tactics.slice(0, settings.forcedRootTactics ?? 6);
   }
+  function findImmediateKingThreatTactic(state, actions, color, settings) {
+    if (!isKingInCheck(state, color))
+      return null;
+    let best = null;
+    for (const action of actions) {
+      const after = applySearchAction(state, action);
+      const afterKing = findKing(after, color);
+      if (!afterKing)
+        continue;
+      if (isKingInCheck(after, color))
+        continue;
+      const score = kingThreatResponseScore(action, color);
+      if (!best || score > best.score || score === best.score && compareAiActions(state, action, best.action, color) < 0) {
+        best = { action, score, forceImmediate: true };
+      }
+    }
+    return best;
+  }
+  function kingThreatResponseScore(action, color) {
+    if (action.target?.type === PIECE_TYPES.KING)
+      return 1e6;
+    if (!action.target) {
+      return action.pieceType === PIECE_TYPES.KING ? 120 : 80;
+    }
+    const targetOwner = ownerFromSnapshot(action.target);
+    const sign = targetOwner === color ? -1 : 1;
+    const intimidationBonus = action.target.isIntimidated ? 420 : 0;
+    const killBonus = action.mode === "kill" || !action.target.hadShield ? 520 : 0;
+    return sign * (900 + targetActionValue(action) * 2.2 + intimidationBonus + killBonus);
+  }
   function maybePreferDominantTactic(state, bestAction, dominantTactic, color, settings) {
     if (!dominantTactic || bestAction.id === dominantTactic.action.id)
       return bestAction;
@@ -1575,6 +1759,7 @@
     score += (state.currentPlayer === color ? 1 : -1) * Math.min(currentActions.length, 20) * 2;
     score += threatPressure(ownActions, enemyActions);
     score += controlScore(ownActions, enemyActions, color);
+    score += kingCheckPressure(state, color);
     score += promotionPressure(state, color);
     score += lifeDeathAccessScore(state, color);
     score += kingSafetyScore(state, color);
@@ -1592,13 +1777,16 @@
   }
   function selectSearchActions(state, actions, color, settings, forced = []) {
     const context = buildActionContext(state, settings);
-    const disciplinedActions = actions.filter((action) => !isBadFatalShieldBreak(state, action));
+    const disciplinedActions = actions.filter((action) => !isBadFatalShieldBreak(state, action) && !isBadLifeDeathHandoff(state, action));
     const candidateActions = disciplinedActions.length > 0 ? disciplinedActions : actions;
-    const nonDominatedActions = candidateActions.filter((action) => !isDominatedBySameRestShieldBreak(candidateActions, action));
+    const nonDominatedActions = candidateActions.filter((action) => !isDominatedBySameDestinationAttack(candidateActions, action));
     const ordered = orderAiActions(state, sortActions(nonDominatedActions.length > 0 ? nonDominatedActions : candidateActions), color, settings, context);
     const selected = ordered.slice(0, settings.maxActions);
     const selectedIds = new Set(selected.map((action) => action.id));
-    for (const action of forced) {
+    for (const action of [
+      ...immediateKingThreatResponses(state, candidateActions, settings),
+      ...forced
+    ]) {
       if (action && !selectedIds.has(action.id)) {
         selected.push(action);
         selectedIds.add(action.id);
@@ -1615,10 +1803,10 @@
     }
     return selected;
   }
-  function isDominatedBySameRestShieldBreak(actions, action) {
-    if (action.kind !== "move" || action.mode !== "slide" || !action.to)
+  function isDominatedBySameDestinationAttack(actions, action) {
+    if (action.kind !== "move" || !action.to)
       return false;
-    return actions.some((candidate) => candidate.kind === "attack" && candidate.mode === "rangedAttack" && candidate.pieceId === action.pieceId && candidate.target?.hadShield && candidate.rest && sameSquare(candidate.rest, action.to));
+    return actions.some((candidate) => candidate.kind === "attack" && candidate.pieceId === action.pieceId && candidate.target?.hadShield && candidate.rest && sameSquare(candidate.rest, action.to));
   }
   function isBadFatalShieldBreak(state, action) {
     if (action.kind !== "attack" || !action.target?.hadShield || action.target?.type === PIECE_TYPES.KING) {
@@ -1629,16 +1817,57 @@
       return false;
     return pieceStake(actor) > shieldPressureValue(action.target) * 1.4;
   }
+  function isBadLifeDeathHandoff(state, action) {
+    if (!isLifeDeathType(action.pieceType) || !action.to)
+      return false;
+    if (action.target?.type === PIECE_TYPES.KING)
+      return false;
+    const actor = findPieceById(state, action.pieceId);
+    if (!actor)
+      return false;
+    const beforeOwner = ownerOf(actor);
+    const afterOwner = ownerAtRow(action.to.r);
+    if (beforeOwner === afterOwner)
+      return false;
+    if (lifeDeathAnnihilationDoomed(state, action).length > 1)
+      return false;
+    return true;
+  }
+  function immediateKingThreatResponses(state, actions, settings) {
+    const mover = state.currentPlayer;
+    if (!findKing(state, mover) || !isKingInCheck(state, mover))
+      return [];
+    return actions.filter((action) => {
+      const after = applySearchAction(state, action);
+      const afterKing = findKing(after, mover);
+      if (!afterKing)
+        return false;
+      return !isKingInCheck(after, mover);
+    });
+  }
   function compareAiActions(state, a, b, color) {
     return actionHeuristic(state, b, color) - actionHeuristic(state, a, color) || a.id.localeCompare(b.id);
   }
   function buildActionContext(state, settings = DEFAULT_OPTIONS) {
     const mover = state.currentPlayer;
     const opponent = oppositeColor(mover);
-    const threats = exposureByTarget(legalActionsForSearch(state, opponent, settings, { respectTurn: false }), mover);
+    const opponentActions = legalActionsForSearch(state, opponent, settings, {
+      respectTurn: false
+    });
+    const threats = exposureByTarget(opponentActions, mover);
+    const threateningAttackers = new Map;
+    for (const action of opponentActions) {
+      if (!action.target || ownerFromSnapshot(action.target) !== mover)
+        continue;
+      const risk = actionExposureValue(action);
+      const previous = threateningAttackers.get(action.pieceId)?.risk ?? 0;
+      if (risk > previous)
+        threateningAttackers.set(action.pieceId, { risk });
+    }
     return {
       mover,
       threats,
+      threateningAttackers,
       threatenedIds: new Set(threats.keys())
     };
   }
@@ -1663,6 +1892,12 @@
     }
     if (action.mode === "heal")
       score += healActionValue(state, action, color);
+    if (isKingInCheck(state, state.currentPlayer)) {
+      if (action.pieceType === PIECE_TYPES.KING)
+        score += 2200;
+      if (action.mode === "lifeDeathMove")
+        score -= 520;
+    }
     const actor = findPieceById(state, action.pieceId);
     const actorColor = actor ? ownerOf(actor) : action.color;
     const actorPerspective = actorColor ?? color;
@@ -1683,6 +1918,7 @@
       score += lifeDeathAnnihilationScore(state, action, color);
       score += actorSign * pathEffectScore(pathReport);
     }
+    score += attackerSuppressionOrderingScore(action, color, context);
     score += defensiveActionOrderingScore(state, action, color, context);
     if (action.target?.hadShield && action.target?.type !== PIECE_TYPES.KING)
       score -= targetSign * 18;
@@ -1704,6 +1940,20 @@
     }
     return score;
   }
+  function attackerSuppressionOrderingScore(action, color, context) {
+    if (!action.targetId || !action.target)
+      return 0;
+    if (action.kind !== "attack" && action.mode !== "kill")
+      return 0;
+    const pressure = context?.threateningAttackers?.get(action.targetId)?.risk ?? 0;
+    if (pressure <= 0)
+      return 0;
+    const targetOwner = ownerFromSnapshot(action.target);
+    const sign = targetOwner === color ? -1 : 1;
+    const resolutionWeight = action.mode === "kill" || !action.target.hadShield ? 1.2 : 0.72;
+    const value = 240 + pressure * resolutionWeight + materialValue(action.target.type) * 0.22 + (action.target.hadShield ? shieldPressureValue(action.target) * 0.64 : 0);
+    return sign * Math.min(1750, value);
+  }
   function rootTacticalScore(before, after, action, color, settings) {
     const actor = findPieceById(before, action.pieceId);
     if (!actor || ownerOf(actor) !== color)
@@ -1714,10 +1964,13 @@
       score += intimidatedTargetTacticalBonus(action, color);
       score += shieldBreakTacticalBonus(after, actor, action, color);
       score += shieldTradeDiscipline(actor, action);
+      score += attackerSuppressionTacticalBonus(before, action, color, settings);
       score -= missedDeathKillPenalty(before, action, color, settings);
     }
-    if (action.mode === "kill")
+    if (action.mode === "kill") {
       score += deathKillTacticalBonus(action, color);
+      score += attackerSuppressionTacticalBonus(before, action, color, settings);
+    }
     if (action.mode === "heal")
       score += healTacticalBonus(action, color);
     score += pathEffectScore(pathEffectReport(before, action)) * 0.72;
@@ -1725,6 +1978,7 @@
     score += lifeDeathAnnihilationScore(before, action, color) * 0.9;
     score += defensiveRootScore(before, after, actor, action, color, settings);
     score += teamSafetyDeltaScore(before, after, color, settings);
+    score += threatCreationDeltaScore(before, after, color, settings);
     score -= selfDestructionPenalty(after, actor, action, color);
     score -= postActionExposurePenalty(after, action, color, settings);
     return score * (settings.tacticalWeight ?? 1);
@@ -1786,6 +2040,23 @@
       bonus *= shieldRepairMultiplier(after, targetAfter, oppositeColor(color));
     return bonus;
   }
+  function attackerSuppressionTacticalBonus(state, action, color, settings) {
+    if (!action.targetId || !action.target)
+      return 0;
+    if (ownerFromSnapshot(action.target) === color)
+      return 0;
+    let pressure = 0;
+    for (const enemyAction of legalActionsForSearch(state, oppositeColor(color), settings, { respectTurn: false })) {
+      if (enemyAction.pieceId !== action.targetId || !enemyAction.target || ownerFromSnapshot(enemyAction.target) !== color) {
+        continue;
+      }
+      pressure = Math.max(pressure, actionExposureValue(enemyAction));
+    }
+    if (pressure <= 0)
+      return 0;
+    const resolutionWeight = action.mode === "kill" || !action.target.hadShield ? 1.16 : 0.68;
+    return Math.min(1450, 190 + pressure * resolutionWeight + materialValue(action.target.type) * 0.18 + (action.target.hadShield ? shieldPressureValue(action.target) * 0.58 : 0));
+  }
   function defensiveRootScore(before, after, actor, action, color, settings) {
     if (!actor || ownerOf(actor) !== color || after.gameOver)
       return 0;
@@ -1814,6 +2085,16 @@
     const totalDelta = beforeExposure.total - afterExposure.total;
     const urgentDelta = beforeExposure.urgent - afterExposure.urgent;
     return totalDelta * 0.18 + urgentDelta * 0.72;
+  }
+  function threatCreationDeltaScore(before, after, color, settings) {
+    if (after.gameOver)
+      return 0;
+    const enemy = oppositeColor(color);
+    const beforePressure = exposureSummary(legalActionsForSearch(before, color, settings, { respectTurn: false }), enemy);
+    const afterPressure = exposureSummary(legalActionsForSearch(after, color, settings, { respectTurn: false }), enemy);
+    const totalDelta = afterPressure.total - beforePressure.total;
+    const urgentDelta = afterPressure.urgent - beforePressure.urgent;
+    return totalDelta * 0.12 + urgentDelta * 0.34;
   }
   function selfDestructionPenalty(after, actor, action, color) {
     if (!actor || ownerOf(actor) !== color)
@@ -2051,11 +2332,16 @@
     const enemyThreats = threatValue(enemyActions);
     return ownThreats - enemyThreats * 1.25;
   }
+  function kingCheckPressure(state, color) {
+    const ownKingCheck = isKingInCheck(state, oppositeColor(color));
+    const enemyKingCheck = isKingInCheck(state, color);
+    return (ownKingCheck ? KING_CAPTURE_THREAT_VALUE * 0.18 : 0) - (enemyKingCheck ? KING_CAPTURE_THREAT_VALUE * 0.28 : 0);
+  }
   function threatValue(actions) {
     const threats = new Map;
     for (const action of actions) {
       if ((action.kind === "attack" || action.mode === "kill") && action.target) {
-        const risk = action.target?.type === PIECE_TYPES.KING ? 2600 : actionExposureValue(action) * (action.target?.hadShield ? 0.42 : 0.38);
+        const risk = action.target?.type === PIECE_TYPES.KING ? KING_CAPTURE_THREAT_VALUE : actionExposureValue(action) * (action.target?.hadShield ? 0.42 : 0.38);
         const previous = threats.get(action.target.id) ?? 0;
         if (risk > previous)
           threats.set(action.target.id, risk);
@@ -2180,7 +2466,7 @@
     for (const dr of [-1, 1]) {
       for (const dc of [-1, 1]) {
         const target = getPiece(state.board, square.r + dr, square.c + dc);
-        if (!target || target.isImmune || target.type === PIECE_TYPES.DEATH || isLightSquare2(target.row, target.col))
+        if (!target || target.isImmune || target.type === PIECE_TYPES.KING || target.type === PIECE_TYPES.DEATH || isLightSquare2(target.row, target.col))
           continue;
         if (isProtectedFromDeathLike(state, target))
           continue;
@@ -2293,13 +2579,17 @@
     if (doomed.length <= 1 || action.target?.type === PIECE_TYPES.KING)
       return 0;
     let materialDelta = 0;
+    let enemySpecialValue = 0;
     for (const piece of doomed) {
+      if (ownerOf(piece) !== color)
+        enemySpecialValue += materialValue(piece.type);
       materialDelta += ownerOf(piece) === color ? -materialValue(piece.type) : materialValue(piece.type);
     }
     const actor = findPieceById(state, action.pieceId);
     const actorValue = actor && ownerOf(actor) === color ? materialValue(actor.type) : 0;
-    const tradeFriction = actorValue > 0 ? Math.min(360, actorValue * 0.38) : 120;
-    return materialDelta - tradeFriction;
+    const tradeFriction = action.mode === "kill" ? actorValue > 0 ? Math.min(180, actorValue * 0.18) : 60 : actorValue > 0 ? Math.min(360, actorValue * 0.38) : 120;
+    const killComboBonus = action.mode === "kill" ? 260 + enemySpecialValue * 0.48 + targetActionValue(action) * 0.34 : 0;
+    return materialDelta - tradeFriction + killComboBonus;
   }
   function lifeDeathAnnihilationDoomed(state, action) {
     if (!isLifeDeathType(action.pieceType))
@@ -2517,7 +2807,7 @@
   }
   function actionExposureValue(action) {
     if (action.target?.type === PIECE_TYPES.KING)
-      return 2200;
+      return KING_CAPTURE_THREAT_VALUE;
     const base = materialValue(action.target?.type);
     const shield = action.target?.hadShield ? shieldValueForType(action.target.type) : 0;
     if (action.mode === "kill")

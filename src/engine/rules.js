@@ -88,6 +88,7 @@ export function generateLegalActions(
   options = {},
 ) {
   const respectTurn = options.respectTurn ?? true;
+  const respectCheck = options.respectCheck ?? true;
   if (state.gameOver) return [];
   if (respectTurn && color !== state.currentPlayer) return [];
 
@@ -96,14 +97,17 @@ export function generateLegalActions(
     if (ownerOf(piece) !== color) continue;
     actions.push(...generatePieceActions(state, piece, { respectTurn }));
   }
+  const legalActions = respectCheck
+    ? filterCheckLegalActions(state, color, actions)
+    : actions;
   if (
     respectTurn &&
     options.includeSkip !== false &&
-    canSkipSpecialMoveFromActions(state, color, actions)
+    canSkipSpecialMoveFromActions(state, color, legalActions)
   ) {
-    actions.push(buildSkipSpecialAction(state, color));
+    legalActions.push(buildSkipSpecialAction(state, color));
   }
-  return sortActions(actions);
+  return sortActions(legalActions);
 }
 
 export function generatePieceActions(state, piece, options = {}) {
@@ -137,7 +141,12 @@ export function generatePieceActions(state, piece, options = {}) {
 export function getActionsForPiece(state, pieceId) {
   const piece = findPieceById(state, pieceId);
   if (!piece || ownerOf(piece) !== state.currentPlayer) return [];
-  return generatePieceActions(state, piece);
+  const legalIds = new Set(
+    generateLegalActions(state).map((action) => action.id),
+  );
+  return generatePieceActions(state, piece).filter((action) =>
+    legalIds.has(action.id),
+  );
 }
 
 export function canSkipSpecialMove(state, color = state.currentPlayer) {
@@ -171,8 +180,68 @@ function buildSkipSpecialAction(state, color) {
 
 function canSkipSpecialMoveFromActions(state, color, actions) {
   if (state.gameOver || state.currentPlayer !== color) return false;
+  if (isKingInCheck(state, color)) return false;
   if (!state.turn.standardMoveMade || state.turn.specialMoveMade) return false;
   return actions.some((action) => action.consumes?.special);
+}
+
+function filterCheckLegalActions(state, color, actions) {
+  const inCheck = isKingInCheck(state, color);
+  if (inCheck && !hasLegalCheckEvasionSequence(state, color, actions))
+    return [];
+  return actions.filter((action) =>
+    isActionLegalRegardingCheck(state, color, action, inCheck),
+  );
+}
+
+function isActionLegalRegardingCheck(state, color, action, inCheck) {
+  if (action.target?.type === PIECE_TYPES.KING) return false;
+
+  if (inCheck) {
+    if (isPreparatoryLifeDeathMove(state, action))
+      return preparatoryLifeDeathMoveAllowsCheckEvasion(state, color, action);
+    if (action.mode === "castle") return false;
+    if (!isStandardCheckEvasionAction(action)) return false;
+    return !actionLeavesKingInCheck(state, action, color);
+  }
+
+  if (action.mode === "castle" && castlingCrossesCheck(state, action, color))
+    return false;
+  if (action.consumes?.standard)
+    return !actionLeavesKingInCheck(state, action, color);
+  if (action.consumes?.special && state.turn.standardMoveMade)
+    return !actionLeavesKingInCheck(state, action, color);
+  return true;
+}
+
+function actionLeavesKingInCheck(state, action, color) {
+  const next = applyAction(state, action, {
+    recordHistory: false,
+    normalize: false,
+  });
+  return isKingInCheck(next, color);
+}
+
+function castlingCrossesCheck(state, action, color) {
+  if (action.mode !== "castle") return false;
+  const king = findPieceById(state, action.pieceId);
+  if (!king) return true;
+  const direction = Math.sign(action.to.c - action.from.c);
+  const kingPath = [
+    { r: action.from.r, c: action.from.c },
+    { r: action.from.r, c: action.from.c + direction },
+    { r: action.to.r, c: action.to.c },
+  ];
+  return kingPath.some((square) => isKingInCheckAt(state, king, square));
+}
+
+function isKingInCheckAt(state, king, square) {
+  const probe = cloneState(state, { preserveHistory: false });
+  const probeKing = findPieceById(probe, king.id);
+  if (!probeKing) return true;
+  setPiece(probe.board, probeKing.row, probeKing.col, null);
+  setPiece(probe.board, square.r, square.c, probeKing);
+  return isKingInCheck(probe, king.color);
 }
 
 function generateStandardMoves(state, piece) {
@@ -236,14 +305,9 @@ function generatePawnMoves(state, piece) {
 
   const jumpTo = { r: piece.row + dir * 2, c: piece.col };
   const jumped = getPiece(state.board, piece.row + dir, piece.col);
-  const onOpponentSide =
-    (piece.color === COLORS.WHITE && piece.row <= 4) ||
-    (piece.color === COLORS.BLACK && piece.row >= 5);
   if (
-    onOpponentSide &&
     jumped &&
     LIFE_DEATH_PIECES.has(jumped.type) &&
-    ownerOf(jumped) !== ownerOf(piece) &&
     isValidSquare(jumpTo.r, jumpTo.c) &&
     !getPiece(state.board, jumpTo.r, jumpTo.c)
   ) {
@@ -335,8 +399,8 @@ function generateKingMoves(state, piece) {
       const to = { r: piece.row + dr, c: piece.col + dc };
       if (!isValidSquare(to.r, to.c)) continue;
       const occupant = getPiece(state.board, to.r, to.c);
-      const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
-      if (occupant && !deathLanding) continue;
+      if (occupant?.type === PIECE_TYPES.DEATH) continue;
+      if (occupant) continue;
       actions.push(
         withActionId({
           kind: "move",
@@ -346,7 +410,7 @@ function generateKingMoves(state, piece) {
           from: { r: piece.row, c: piece.col },
           to,
           path: [],
-          deathLanding,
+          deathLanding: false,
           consumes: { standard: true, special: false },
         }),
       );
@@ -491,31 +555,37 @@ function generateCastles(state, king) {
   return actions;
 }
 
-function generateStandardAttacks(state, piece) {
+function generateStandardAttacks(state, piece, options = {}) {
   if (piece.type === PIECE_TYPES.PAWN) {
     return [
-      ...generatePawnAttacks(state, piece),
+      ...generatePawnAttacks(state, piece, options),
       ...generateEnPassantActions(state, piece),
     ];
   }
-  if (piece.type === PIECE_TYPES.KING) return generateKingAttacks(state, piece);
+  if (piece.type === PIECE_TYPES.KING)
+    return generateKingAttacks(state, piece, options);
   if (piece.type === PIECE_TYPES.KNIGHT)
-    return generateKnightAttacks(state, piece);
+    return generateKnightAttacks(state, piece, options);
   if (piece.type === PIECE_TYPES.ROOK)
-    return generateSlidingAttacks(state, piece, ROOK_DIRS);
+    return generateSlidingAttacks(state, piece, ROOK_DIRS, options);
   if (piece.type === PIECE_TYPES.BISHOP)
-    return generateSlidingAttacks(state, piece, BISHOP_DIRS);
+    return generateSlidingAttacks(state, piece, BISHOP_DIRS, options);
   if (piece.type === PIECE_TYPES.QUEEN)
-    return generateSlidingAttacks(state, piece, [...ROOK_DIRS, ...BISHOP_DIRS]);
+    return generateSlidingAttacks(
+      state,
+      piece,
+      [...ROOK_DIRS, ...BISHOP_DIRS],
+      options,
+    );
   return [];
 }
 
-function generatePawnAttacks(state, piece) {
+function generatePawnAttacks(state, piece, options = {}) {
   const actions = [];
   const dir = pawnDirection(piece);
   for (const dc of [-1, 1]) {
     const target = getPiece(state.board, piece.row + dir, piece.col + dc);
-    if (!isAttackTarget(piece, target)) continue;
+    if (!isAttackTarget(piece, target, options)) continue;
     actions.push(
       ...buildAttackActions(
         state,
@@ -570,13 +640,13 @@ function generateEnPassantActions(state, piece) {
   return actions;
 }
 
-function generateKingAttacks(state, piece) {
+function generateKingAttacks(state, piece, options = {}) {
   const actions = [];
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
       const target = getPiece(state.board, piece.row + dr, piece.col + dc);
-      if (!isAttackTarget(piece, target)) continue;
+      if (!isAttackTarget(piece, target, options)) continue;
       actions.push(
         ...buildAttackActions(
           state,
@@ -597,11 +667,11 @@ function generateKingAttacks(state, piece) {
   return actions;
 }
 
-function generateKnightAttacks(state, piece) {
+function generateKnightAttacks(state, piece, options = {}) {
   const actions = [];
   for (const [dr, dc] of KNIGHT_DELTAS) {
     const target = getPiece(state.board, piece.row + dr, piece.col + dc);
-    if (!isAttackTarget(piece, target)) continue;
+    if (!isAttackTarget(piece, target, options)) continue;
     if (!target.hasShield) {
       actions.push(
         ...buildAttackActions(
@@ -632,7 +702,7 @@ function generateKnightAttacks(state, piece) {
   return actions;
 }
 
-function generateSlidingAttacks(state, piece, directions) {
+function generateSlidingAttacks(state, piece, directions, options = {}) {
   const actions = [];
   for (const [dr, dc] of directions) {
     for (let distance = 1; distance < BOARD_SIZE; distance++) {
@@ -643,7 +713,7 @@ function generateSlidingAttacks(state, piece, directions) {
       );
       if (!target) continue;
       if (LIFE_DEATH_PIECES.has(target.type)) continue;
-      if (!isAttackTarget(piece, target)) break;
+      if (!isAttackTarget(piece, target, options)) break;
 
       const staging = {
         r: target.row - dr,
@@ -677,9 +747,11 @@ function generateSlidingAttacks(state, piece, directions) {
   return actions;
 }
 
-function isAttackTarget(attacker, target) {
+function isAttackTarget(attacker, target, options = {}) {
   if (!target || target.isImmune) return false;
   if (LIFE_DEATH_PIECES.has(target.type)) return false;
+  if (target.type === PIECE_TYPES.KING && !options.allowKingTarget)
+    return false;
   return ownerOf(target) !== ownerOf(attacker);
 }
 
@@ -871,7 +943,8 @@ function generateDeathKillActions(state, piece) {
     const target = getPiece(state.board, piece.row + dr, piece.col + dc);
     if (!target || target.isImmune || !isDarkSquare(target.row, target.col))
       continue;
-    if (target.type === PIECE_TYPES.DEATH) continue;
+    if (target.type === PIECE_TYPES.KING || target.type === PIECE_TYPES.DEATH)
+      continue;
     if (isProtectedFromDeath(target, state)) continue;
     actions.push(
       withActionId({
@@ -907,6 +980,7 @@ function isProtectedFromDeath(target, state) {
 
 export function applyAction(state, action, options = {}) {
   const recordHistoryEntry = options.recordHistory ?? true;
+  const normalizeAfterAction = options.normalize ?? true;
   const next = cloneState(state, { preserveHistory: recordHistoryEntry });
   if (next.gameOver) return next;
   const actorColor = next.currentPlayer;
@@ -930,8 +1004,10 @@ export function applyAction(state, action, options = {}) {
   updateEnPassant(next, action, previousEnPassant, actorColor);
   checkForAnnihilation(next);
   checkForMaterialDraw(next);
-  if (!next.gameOver) updateIntimidation(next);
-  normalizeTurn(next);
+  if (normalizeAfterAction) {
+    if (!next.gameOver) updateIntimidation(next);
+    normalizeTurn(next);
+  }
 
   return next;
 }
@@ -976,6 +1052,7 @@ function applyAttackAction(state, action) {
   const attacker = findPieceById(state, action.pieceId);
   const target = findPieceById(state, action.targetId);
   if (!attacker || !target || target.isImmune) return;
+  if (target.type === PIECE_TYPES.KING) return;
 
   const attackerFrom = { r: attacker.row, c: attacker.col };
   const diesAfterAttack =
@@ -987,7 +1064,7 @@ function applyAttackAction(state, action) {
   if (targetHadShield) {
     target.hasShield = false;
   } else {
-    removePiece(state, target);
+    removePiece(state, target, ownerOf(attacker));
   }
 
   const finalSquare = targetHadShield ? action.staging : action.rest;
@@ -1023,11 +1100,12 @@ function applySpecialAction(state, action) {
   if (
     action.mode === "kill" &&
     !target.isImmune &&
+    target.type !== PIECE_TYPES.KING &&
     target.type !== PIECE_TYPES.DEATH &&
     isDarkSquare(target.row, target.col) &&
     !isProtectedFromDeath(target, state)
   ) {
-    removePiece(state, target);
+    removePiece(state, target, ownerOf(piece));
     setPiece(state.board, piece.row, piece.col, null);
     setPiece(state.board, action.to.r, action.to.c, piece);
     piece.hasMoved = true;
@@ -1107,6 +1185,9 @@ export function normalizeTurn(state) {
   if (state.gameOver) return state;
   checkForMaterialDraw(state);
   if (state.gameOver) return state;
+  if (applyCheckmateResult(state, state.currentPlayer)) return state;
+  if (applyCheckmateResult(state, oppositeColor(state.currentPlayer)))
+    return state;
   let skipped = 0;
   while (!state.gameOver && generateLegalActions(state).length === 0) {
     skipped += 1;
@@ -1118,8 +1199,19 @@ export function normalizeTurn(state) {
       break;
     }
     switchTurn(state);
+    if (applyCheckmateResult(state, state.currentPlayer)) break;
+    if (applyCheckmateResult(state, oppositeColor(state.currentPlayer))) break;
   }
   return state;
+}
+
+function applyCheckmateResult(state, loser) {
+  if (!isCheckmate(state, loser)) return false;
+  state.gameOver = {
+    winner: oppositeColor(loser),
+    reason: `${loser} king checkmated`,
+  };
+  return true;
 }
 
 function switchTurn(state) {
@@ -1218,6 +1310,85 @@ export function updateIntimidation(state) {
   }
 }
 
+export function isKingInCheck(state, color) {
+  const king = findKing(state, color);
+  if (!king) return false;
+  return allPieces(state).some(
+    (piece) => ownerOf(piece) !== color && attacksKing(state, piece, king),
+  );
+}
+
+export function isCheckmate(state, color = state.currentPlayer) {
+  if (!isKingInCheck(state, color)) return false;
+  return !hasLegalCheckEvasionSequence(checkmateProbeState(state, color), color);
+}
+
+function checkmateProbeState(state, color) {
+  if (state.currentPlayer === color) return state;
+  const probe = cloneState(state, { preserveHistory: false });
+  probe.currentPlayer = color;
+  probe.turn = { standardMoveMade: false, specialMoveMade: false };
+  return probe;
+}
+
+function hasLegalCheckEvasionSequence(state, color, actions = null) {
+  if (legalStandardCheckEvasionActions(state, color).length > 0) return true;
+  return preparatoryLifeDeathActions(state, color, actions).some((action) =>
+    preparatoryLifeDeathMoveAllowsCheckEvasion(state, color, action),
+  );
+}
+
+function legalStandardCheckEvasionActions(state, color) {
+  const king = findKing(state, color);
+  if (!king) return [];
+  return allPieces(state)
+    .filter((piece) => ownerOf(piece) === color)
+    .flatMap((piece) => generatePieceActions(state, piece))
+    .filter(
+      (action) =>
+        isStandardCheckEvasionAction(action) &&
+        !actionLeavesKingInCheck(state, action, color),
+    );
+}
+
+function isStandardCheckEvasionAction(action) {
+  return (
+    action.consumes?.standard &&
+    !action.consumes?.special &&
+    action.mode !== "castle"
+  );
+}
+
+function preparatoryLifeDeathActions(state, color, actions = null) {
+  if (state.currentPlayer !== color) return [];
+  if (state.turn.standardMoveMade || state.turn.specialMoveMade) return [];
+  const candidates =
+    actions ??
+    allPieces(state).flatMap((piece) =>
+      ownerOf(piece) === color ? generatePieceActions(state, piece) : [],
+    );
+  return candidates.filter((action) =>
+    isPreparatoryLifeDeathMove(state, action),
+  );
+}
+
+function isPreparatoryLifeDeathMove(state, action) {
+  return (
+    action.mode === "lifeDeathMove" &&
+    !state.turn.standardMoveMade &&
+    action.consumes?.special &&
+    !action.consumes?.standard
+  );
+}
+
+function preparatoryLifeDeathMoveAllowsCheckEvasion(state, color, action) {
+  const next = applyAction(state, action, {
+    recordHistory: false,
+    normalize: false,
+  });
+  return legalStandardCheckEvasionActions(next, color).length > 0;
+}
+
 function clearIntimidation(state) {
   for (const piece of allPieces(state)) {
     if (!piece.isIntimidated) continue;
@@ -1230,7 +1401,7 @@ function clearIntimidation(state) {
 
 function attacksKing(state, piece, king) {
   if (!STANDARD_PIECES.has(piece.type)) return false;
-  return generateStandardAttacks(state, piece).some(
+  return generateStandardAttacks(state, piece, { allowKingTarget: true }).some(
     (action) => action.targetId === king.id,
   );
 }

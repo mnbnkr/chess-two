@@ -13,19 +13,198 @@
     <link rel="stylesheet" href="style.css" />
   </head>
 
-  <body>
+  <body class="app-booting">
     <div id="game-container">
+      <div id="developer-panel-stack">
+        <aside id="developer-panel" aria-label="Developer panel">
+          <div class="dev-panel-header">
+            <h2 class="dev-panel-title">Developer</h2>
+            <button
+              id="dev-collapse-button"
+              type="button"
+              class="dev-collapse-button"
+              data-dev-action="toggle-collapse"
+              aria-expanded="true"
+              aria-controls="developer-panel-content"
+            >
+              Hide
+            </button>
+          </div>
+          <div id="developer-panel-content" class="dev-panel-content">
+          <label class="dev-field" for="variant-select">
+            <span>Variant</span>
+            <select id="variant-select">
+              <option value="frame-chess">Frame Chess</option>
+              <option value="frame-chess-without-ld">Frame Chess w/o LD</option>
+              <option value="toad-fool">Toad-Fool Chess</option>
+              <option value="toad-fool-classic">Toad-Fool Classic</option>
+              <option value="chess-two">Chess Two</option>
+            </select>
+          </label>
+          <div class="dev-button-row">
+            <button type="button" data-dev-action="new-game">New</button>
+            <button type="button" data-dev-action="load-defaults">
+              Defaults
+            </button>
+          </div>
+          <label class="dev-check dev-primary-check" for="shields-disabled">
+            <input id="shields-disabled" type="checkbox" />
+            <span>Shield-less pieces</span>
+          </label>
+          <div class="dev-grid dev-pawn-row">
+            <label class="dev-field" for="pawn-behavior-select">
+              <span>Pawn Preset</span>
+              <select id="pawn-behavior-select">
+                <option value="chessTwo">Orthodox</option>
+                <option value="frontalFan">Frontal Fan</option>
+                <option value="frontalFan2">Frontal Fan 2</option>
+              </select>
+            </label>
+            <label class="dev-field" for="pawn-initial-max-step-select">
+              <span>Pawn Max</span>
+              <select id="pawn-initial-max-step-select">
+                <option value="2">2</option>
+                <option value="3">3</option>
+              </select>
+            </label>
+          </div>
+          <label class="dev-field" for="knight-movement-select">
+            <span>Knight Move</span>
+            <select id="knight-movement-select">
+              <option value="ramp">Ramp</option>
+              <option value="orthodox">Orthodox</option>
+            </select>
+          </label>
+          <div class="dev-check-row">
+            <label class="dev-check" for="frame-enabled">
+              <input id="frame-enabled" type="checkbox" />
+              <span>Frame</span>
+            </label>
+            <label class="dev-check" for="wraparound-enabled">
+              <input id="wraparound-enabled" type="checkbox" />
+              <span>Wrap-around</span>
+            </label>
+          </div>
+          <label class="dev-check" for="checkmate-disabled">
+            <input id="checkmate-disabled" type="checkbox" />
+            <span>King capture mode</span>
+          </label>
+          <div class="dev-grid">
+            <label class="dev-field" for="dev-current-player">
+              <span>Player</span>
+              <select id="dev-current-player">
+                <option value="white">White</option>
+                <option value="black">Black</option>
+              </select>
+            </label>
+            <label class="dev-field" for="dev-move-number">
+              <span>Move</span>
+              <input id="dev-move-number" type="number" min="1" value="1" />
+            </label>
+          </div>
+          <div class="dev-check-row">
+            <label class="dev-check" for="dev-standard-used">
+              <input id="dev-standard-used" type="checkbox" />
+              <span>Standard used</span>
+            </label>
+            <label class="dev-check" for="dev-special-used">
+              <input id="dev-special-used" type="checkbox" />
+              <span>Special used</span>
+            </label>
+          </div>
+          <section
+            class="dev-section dev-board-edit-section"
+            aria-label="Board edit"
+          >
+            <div class="dev-board-edit-heading">
+              <label
+                class="dev-check dev-section-toggle"
+                for="board-edit-enabled"
+              >
+                <input id="board-edit-enabled" type="checkbox" />
+                <span>Board edit</span>
+              </label>
+              <button type="button" data-dev-action="undo-board-edit" disabled>
+                Undo Last Edit
+              </button>
+            </div>
+            <label class="dev-field" for="check-pattern-select">
+              <span>Check Pattern</span>
+              <select id="check-pattern-select">
+                <option value="standard">Standard</option>
+                <option value="inverted">Inverted</option>
+              </select>
+            </label>
+            <div class="dev-grid">
+              <label class="dev-field" for="edit-piece-type">
+                <span>Piece</span>
+                <select id="edit-piece-type">
+                  <option value="">Empty</option>
+                  <option value="Pawn">Pawn</option>
+                  <option value="Rook">Rook</option>
+                  <option value="Knight">Knight</option>
+                  <option value="Bishop">Bishop</option>
+                  <option value="Queen">Queen</option>
+                  <option value="King">King</option>
+                  <option value="Fool">Fool</option>
+                  <option value="Toad">Toad</option>
+                  <option value="Life">Life</option>
+                  <option value="Death">Death</option>
+                </select>
+              </label>
+              <label class="dev-field" for="edit-piece-color">
+                <span>Color</span>
+                <select id="edit-piece-color">
+                  <option value="white">White</option>
+                  <option value="black">Black</option>
+                </select>
+              </label>
+            </div>
+            <div class="dev-check-row">
+              <label class="dev-check" for="edit-piece-shield">
+                <input id="edit-piece-shield" type="checkbox" checked />
+                <span>Shield</span>
+              </label>
+              <label class="dev-check" for="edit-piece-immune">
+                <input id="edit-piece-immune" type="checkbox" />
+                <span>Immune</span>
+              </label>
+            </div>
+            <label class="dev-check" for="edit-piece-moved">
+              <input id="edit-piece-moved" type="checkbox" />
+              <span>Moved</span>
+            </label>
+            <label class="dev-field" for="fen-field">
+              <span>FEN</span>
+              <textarea id="fen-field" rows="2" spellcheck="false"></textarea>
+            </label>
+            <div class="dev-button-row dev-fen-actions">
+              <button type="button" data-dev-action="fen-export">Export</button>
+              <button type="button" data-dev-action="fen-import">Import</button>
+              <div
+                id="dev-toast"
+                class="dev-toast"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></div>
+            </div>
+            <button type="button" data-dev-action="clear-board">
+              Clear Board
+            </button>
+          </section>
+          </div>
+        </aside>
+        <p id="dev-message" aria-live="polite"></p>
+      </div>
       <aside id="right-rail">
-        <div
-          id="captured-top"
-          class="captured-pieces"
-          aria-live="polite"
-        ></div>
+        <div id="captured-top" class="captured-pieces" aria-live="polite"></div>
         <div id="ui-panel">
           <h1>Chess Two</h1>
           <div id="status-panel">
             <div id="turn-status-container">
               <p>Move: <span id="move-number">1</span></p>
+              <p>Variant: <span id="variant-name">Toad-Fool Chess</span></p>
               <p>Turn: <span id="player-turn">White</span></p>
               <p>
                 Standard Move: <span id="standard-move-status">Available</span>
@@ -69,8 +248,8 @@
                   <h2>Rules</h2>
                   <ul>
                     <li>
-                      Pieces use shields: most survive one hit before they can be
-                      removed.
+                      Pieces use shields: most survive one hit before they can
+                      be removed.
                     </li>
                     <li>
                       Each turn has one standard move and one Life/Death move.
@@ -87,13 +266,14 @@
                       attacks still land before the attacker dies.
                     </li>
                     <li>
-                      Shield breaks use a staging square. Killing blows resolve on
-                      the destroyed piece's square.
+                      Shield breaks use a staging square. Killing blows resolve
+                      on the destroyed piece's square.
                     </li>
                     <li>
-                      Knights use L-shapes only to attack enemy pieces;
-                      non-attacking empty-square moves must be ramp jumps,
-                      including Life and Death pass-through effects.
+                      Chess Two Knights use ramp jumps for empty-square moves
+                      and L-shapes for attacks. Toad-Fool and Frame Chess allow
+                      orthodox L-moves, and all Knight L-moves apply bend-square
+                      Life and Death pass-through effects.
                     </li>
                     <li>
                       A piece giving check becomes Intimidated, suppressing its
@@ -102,9 +282,15 @@
                       blocking, or removing the checker.
                     </li>
                     <li>
-                      Pawns can advance up to three squares from home, jump any
-                      Life/Death blocker, use variant en passant as the
-                      immediate standard reply, and promote on the far rank.
+                      Chess Two pawns can advance up to three squares from home.
+                      Toad-Fool Frontal Fan pawns move in a compact fan but
+                      attack by orthodox one-square diagonals. Pawns can use
+                      variant en passant and promote on the far rank.
+                    </li>
+                    <li>
+                      Frame Chess suppresses shields on edge squares, blocks
+                      non-King standard attacks from or through the frame, and
+                      can wrap movement horizontally between the a and k files.
                     </li>
                     <li>Kings are checkmated, not captured.</li>
                     <li>Only Kings and Life pieces remaining is a draw.</li>
@@ -219,10 +405,6 @@
         <div id="file-coordinates" aria-hidden="true"></div>
       </div>
     </div>
-    <script>
-      const chessTwoScript = document.createElement("script");
-      chessTwoScript.src = `chess-two.bundle.js?v=${Date.now()}`;
-      document.body.appendChild(chessTwoScript);
-    </script>
+    <script type="module" src="./src/main.js"></script>
   </body>
 </html>

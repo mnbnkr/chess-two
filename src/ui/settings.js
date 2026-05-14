@@ -1,10 +1,16 @@
+import {
+  DEFAULT_UI_VARIANT_ID,
+  normalizeVariantId,
+} from "../variants/index.js";
+
 export const DEFAULT_SETTINGS = {
-  aiLevel: 3,
+  aiLevel: 0,
   animationsEnabled: true,
   playerSide: "white",
+  variantId: DEFAULT_UI_VARIANT_ID,
 };
 
-const STORAGE_KEY = "chess-two-settings";
+const STORAGE_KEY = "chess-two-settings-v2-frame-default";
 
 const AI_LEVELS = {
   0: { label: "Off (self-play)", maxDepth: 0, maxActions: 0, thinkDelay: 0 },
@@ -87,10 +93,17 @@ export function saveSettings(settings, storage = globalThis.localStorage) {
   return normalized;
 }
 
+export function clearStoredSettings(storage = globalThis.localStorage) {
+  storage?.removeItem?.(STORAGE_KEY);
+}
+
 export function normalizeSettings(settings) {
   const aiLevel = Number(settings?.aiLevel);
   const playerSide =
     settings?.playerSide === "black" ? "black" : DEFAULT_SETTINGS.playerSide;
+  const variantId = normalizeVariantId(
+    settings?.variantId ?? DEFAULT_SETTINGS.variantId,
+  );
   return {
     aiLevel:
       Number.isInteger(aiLevel) && aiLevel >= 0 && aiLevel <= 5
@@ -101,6 +114,7 @@ export function normalizeSettings(settings) {
         ? settings.animationsEnabled
         : DEFAULT_SETTINGS.animationsEnabled,
     playerSide,
+    variantId,
   };
 }
 

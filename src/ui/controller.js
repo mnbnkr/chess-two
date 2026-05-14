@@ -1,17 +1,28 @@
 import {
   COLORS,
   PIECE_TYPES,
+  applyShieldOverrideToBoard,
   applyAction,
+  canHaveShield,
   canSkipSpecialMove,
   chooseAiAction,
   cloneState,
   createGameState,
+  createPiece,
+  createStateFromFen,
+  createEmptyState,
   findPieceById,
+  foolProfileForState,
   generateLegalActions,
   getActionsForPiece,
+  normalizeRuleOverrides,
+  normalizeTurn,
   ownerOf,
   skipSpecialMove,
+  setPiece,
+  stateToFen,
   squareKey,
+  updateIntimidation,
 } from "../engine/index.js";
 import { Renderer, emptyHighlights } from "./renderer.js";
 import {
@@ -20,14 +31,19 @@ import {
   moveAnimationDurationForAction,
 } from "./animation.js";
 import {
+  DEFAULT_SETTINGS,
   aiLabelForLevel,
   aiOptionsForLevel,
+  clearStoredSettings,
   effectivePlayerSide,
   isAiEnabled,
   loadSettings,
   saveSettings,
 } from "./settings.js";
-import { AI_WORKER_SOURCE } from "../generated/ai-worker-source.js";
+import {
+  DEFAULT_UI_VARIANT_ID,
+  getVariant,
+} from "../variants/index.js";
 
 const AI_COLOR = COLORS.BLACK;
 const HUMAN_COLOR = COLORS.WHITE;
@@ -41,9 +57,11 @@ export class GameController {
     controlsEl,
     settingsEl,
     rulesEl,
+    devPanelEl,
     capturedTopEl,
     capturedBottomEl,
   }) {
+    this.settings = loadSettings();
     this.renderer = new Renderer({
       boardEl,
       coordinateEl,
@@ -52,22 +70,39 @@ export class GameController {
       controlsEl,
       settingsEl,
       rulesEl,
+      devPanelEl,
       capturedTopEl,
       capturedBottomEl,
     });
     this.animator = new BoardAnimator(boardEl);
-    this.state = createGameState();
+    this.state = createGameState({ variantId: this.settings.variantId });
     this.view = this.createEmptyView();
     this.isAiRunning = false;
     this.aiRunToken = 0;
     this.undoStack = [];
+    this.boardEditUndoStack = [];
     this.lastUndoAnchorKey = null;
-    this.settings = loadSettings();
+    this.developer = {
+      collapsed: false,
+      boardEditEnabled: false,
+      editPieceType: "",
+      editPieceColor: COLORS.WHITE,
+      editPieceShield: true,
+      editPieceImmune: false,
+      editPieceMoved: false,
+      fenText: stateToFen(this.state),
+      keepFenDraft: false,
+      message: "",
+      toastMessage: "",
+    };
+    this.devToastTimer = null;
     this.settingsOpen = false;
     this.rulesOpen = false;
     this.documentClickHandler = (event) => this.handleDocumentClick(event);
     this.boardContextMenuHandler = (event) =>
       this.handleBoardContextMenu(event);
+    this.windowResizeHandler = () => this.renderer.resizeDeveloperFenField();
+    this.windowKeydownHandler = (event) => this.handleWindowKeydown(event);
 
     boardEl.addEventListener("click", (event) => this.handleBoardClick(event));
     boardEl.addEventListener("contextmenu", this.boardContextMenuHandler);
@@ -87,11 +122,22 @@ export class GameController {
     settingsEl?.addEventListener("change", (event) =>
       this.handleSettingsInput(event),
     );
+    devPanelEl?.addEventListener("click", (event) =>
+      this.handleDeveloperClick(event),
+    );
+    devPanelEl?.addEventListener("input", (event) =>
+      this.handleDeveloperInput(event),
+    );
+    devPanelEl?.addEventListener("change", (event) =>
+      this.handleDeveloperInput(event),
+    );
     globalThis.document?.addEventListener?.(
       "click",
       this.documentClickHandler,
       true,
     );
+    globalThis.addEventListener?.("resize", this.windowResizeHandler);
+    globalThis.addEventListener?.("keydown", this.windowKeydownHandler, true);
     this.render();
     this.maybeRunAiTurn();
   }
@@ -112,9 +158,14 @@ export class GameController {
 
   handleBoardClick(event) {
     const square = event.target.closest(".square");
-    if (!square || !this.canHumanAct()) return;
+    if (!square) return;
     const row = Number(square.dataset.row);
     const col = Number(square.dataset.col);
+    if (this.developer.boardEditEnabled) {
+      this.applyBoardEdit(row, col);
+      return;
+    }
+    if (!this.canHumanAct()) return;
 
     if (this.view.phase === "staging") {
       this.chooseStaging(row, col);
@@ -219,6 +270,22 @@ export class GameController {
     }
   }
 
+  handleWindowKeydown(event) {
+    const isCacheReset =
+      event?.key === "F5" && (event.ctrlKey || event.metaKey);
+    if (!isCacheReset) return;
+    event.preventDefault?.();
+    this.resetRuntimeDefaultsAndReload();
+  }
+
+  async resetRuntimeDefaultsAndReload() {
+    this.cancelAi();
+    clearStoredSettings();
+    this.settings = { ...DEFAULT_SETTINGS };
+    await clearBrowserRuntimeCaches();
+    globalThis.location?.reload?.();
+  }
+
   handleSettingsClick(event) {
     const sideButton = event.target.closest?.("[data-side]");
     if (!sideButton || sideButton.disabled || this.isPlayingAgainstAi()) return;
@@ -227,6 +294,126 @@ export class GameController {
       playerSide: sideButton.dataset.side,
     });
     this.render();
+  }
+
+  handleDeveloperClick(event) {
+    const action = event.target.closest?.("[data-dev-action]")?.dataset
+      ?.devAction;
+    if (!action) return;
+    if (action === "new-game") this.newGame();
+    if (action === "toggle-collapse") this.toggleDeveloperPanel();
+    if (action === "load-defaults") this.loadVariantDefaults();
+    if (action === "fen-export") void this.exportFen();
+    if (action === "fen-import") this.importFen();
+    if (action === "clear-board") this.clearBoardForEditing();
+    if (action === "undo-board-edit") this.undoBoardEdit();
+  }
+
+  handleDeveloperInput(event) {
+    const target = event.target;
+    if (!target?.id) return;
+    if (target.id === "variant-select") {
+      this.setVariant(normalizeVariantSelectValue(target.value));
+      return;
+    }
+    if (target.id === "check-pattern-select") {
+      this.updateRuleOverrides({ checkPattern: target.value });
+      return;
+    }
+    if (target.id === "pawn-behavior-select") {
+      this.updateRuleOverrides({ pawnBehavior: target.value });
+      return;
+    }
+    if (target.id === "pawn-initial-max-step-select") {
+      this.updateRuleOverrides({ pawnInitialMaxStep: Number(target.value) });
+      return;
+    }
+    if (target.id === "knight-movement-select") {
+      this.updateRuleOverrides({ knightMovement: target.value });
+      return;
+    }
+    if (target.id === "shields-disabled") {
+      this.updateRuleOverrides(
+        { shieldsEnabled: !target.checked },
+        { restoreShields: !target.checked },
+      );
+      return;
+    }
+    if (target.id === "frame-enabled") {
+      this.updateRuleOverrides({ frameEnabled: target.checked });
+      return;
+    }
+    if (target.id === "wraparound-enabled") {
+      this.updateRuleOverrides({ wraparoundEnabled: target.checked });
+      return;
+    }
+    if (target.id === "checkmate-disabled") {
+      this.updateRuleOverrides({ checkmateEnabled: !target.checked });
+      return;
+    }
+    if (target.id === "dev-current-player") {
+      this.applyDeveloperMutation(() => {
+        this.state.currentPlayer =
+          target.value === COLORS.BLACK ? COLORS.BLACK : COLORS.WHITE;
+      });
+      return;
+    }
+    if (target.id === "dev-standard-used") {
+      this.applyDeveloperMutation(() => {
+        this.state.turn.standardMoveMade = target.checked;
+      });
+      return;
+    }
+    if (target.id === "dev-special-used") {
+      this.applyDeveloperMutation(() => {
+        this.state.turn.specialMoveMade = target.checked;
+      });
+      return;
+    }
+    if (target.id === "dev-move-number") {
+      this.applyDeveloperMutation(() => {
+        this.state.moveNumber = Math.max(1, Number(target.value) || 1);
+      });
+      return;
+    }
+    if (target.id === "board-edit-enabled") {
+      this.developer.boardEditEnabled = target.checked;
+      this.cancelAi();
+      this.clearSelection();
+      this.render();
+      return;
+    }
+    if (target.id === "edit-piece-type") {
+      this.developer.editPieceType = target.value;
+      this.render();
+      return;
+    }
+    if (target.id === "edit-piece-color") {
+      this.developer.editPieceColor =
+        target.value === COLORS.BLACK ? COLORS.BLACK : COLORS.WHITE;
+      this.render();
+      return;
+    }
+    if (target.id === "edit-piece-shield") {
+      this.developer.editPieceShield = target.checked;
+      this.render();
+      return;
+    }
+    if (target.id === "edit-piece-immune") {
+      this.developer.editPieceImmune = target.checked;
+      this.render();
+      return;
+    }
+    if (target.id === "edit-piece-moved") {
+      this.developer.editPieceMoved = target.checked;
+      this.render();
+      return;
+    }
+    if (target.id === "fen-field") {
+      this.developer.fenText = target.value;
+      this.developer.keepFenDraft = true;
+      this.renderer.resizeDeveloperFenField();
+    }
   }
 
   handleDocumentClick(event) {
@@ -263,10 +450,18 @@ export class GameController {
 
   selectPiece(piece) {
     const actions = getActionsForPiece(this.state, piece.id);
+    const foolProfile =
+      piece.type === PIECE_TYPES.FOOL
+        ? foolProfileForState(this.state, piece)
+        : null;
     if (actions.length === 0) {
       this.view = this.createEmptyView();
       this.view.phaseInfo =
-        "That piece has no legal action in the remaining turn slots.";
+        piece.type === PIECE_TYPES.FOOL
+          ? foolProfile
+            ? `Fool selected: imitating ${foolProfile.type}, but has no legal action in the remaining turn slots.`
+            : "Fool selected: no copied behavior yet."
+          : "That piece has no legal action in the remaining turn slots.";
       this.render();
       return;
     }
@@ -275,7 +470,10 @@ export class GameController {
       ...this.createEmptyView(),
       selectedPiece: piece,
       selectedActions: actions,
-      phaseInfo: `${piece.type} selected.`,
+      phaseInfo:
+        piece.type === PIECE_TYPES.FOOL
+          ? `Fool selected: imitating ${foolProfile?.type ?? "nothing"}.`
+          : `${piece.type} selected.`,
       highlights: highlightsForActions(this.state, actions, piece),
     };
     this.render();
@@ -287,8 +485,8 @@ export class GameController {
       return action.kind === "move" && square?.r === row && square?.c === col;
     });
     if (candidates.length === 0) return false;
-    if (candidates[0]?.mode === "knightRamp") {
-      this.commitOrPromote([chooseKnightRampAction(candidates)]);
+    if (isRampAction(candidates[0])) {
+      this.commitOrPromote([chooseRampAction(candidates)]);
     } else {
       this.commitOrPromote(candidates);
     }
@@ -433,17 +631,205 @@ export class GameController {
   }
 
   newGame() {
-    this.aiRunToken += 1;
-    cancelAiWorkerSearch();
-    this.state = createGameState();
+    this.cancelAi();
+    this.state = createGameState({
+      variantId: this.settings.variantId,
+      overrides: this.state.ruleOverrides,
+    });
     this.isAiRunning = false;
     this.undoStack = [];
+    this.boardEditUndoStack = [];
     this.lastUndoAnchorKey = null;
     this.settingsOpen = false;
     this.rulesOpen = false;
     this.clearSelection();
     this.render();
     this.maybeRunAiTurn();
+  }
+
+  cancelAi() {
+    this.aiRunToken += 1;
+    this.isAiRunning = false;
+    cancelAiWorkerSearch();
+  }
+
+  toggleDeveloperPanel() {
+    this.developer.collapsed = !this.developer.collapsed;
+    this.render();
+  }
+
+  setVariant(variantId) {
+    const nextVariantId = getVariant(variantId).id;
+    this.settings = saveSettings({
+      ...this.settings,
+      variantId: nextVariantId,
+      aiLevel:
+        nextVariantId === DEFAULT_UI_VARIANT_ID ? 0 : this.settings.aiLevel,
+    });
+    this.cancelAi();
+    this.state = createGameState({ variantId: nextVariantId });
+    this.undoStack = [];
+    this.boardEditUndoStack = [];
+    this.lastUndoAnchorKey = null;
+    this.developer.fenText = stateToFen(this.state);
+    this.developer.keepFenDraft = false;
+    this.developer.message = `${getVariant(nextVariantId).name} loaded.`;
+    this.clearSelection();
+    this.render();
+    this.maybeRunAiTurn();
+  }
+
+  loadVariantDefaults() {
+    this.cancelAi();
+    this.state = createGameState({ variantId: this.state.variantId });
+    this.settings = saveSettings({
+      ...this.settings,
+      variantId: this.state.variantId,
+      aiLevel:
+        this.state.variantId === DEFAULT_UI_VARIANT_ID
+          ? 0
+          : this.settings.aiLevel,
+    });
+    this.undoStack = [];
+    this.boardEditUndoStack = [];
+    this.lastUndoAnchorKey = null;
+    this.developer.fenText = stateToFen(this.state);
+    this.developer.keepFenDraft = false;
+    this.developer.message = "Variant defaults restored.";
+    this.clearSelection();
+    this.render();
+  }
+
+  updateRuleOverrides(overrides, options = {}) {
+    this.applyDeveloperMutation(() => {
+      const wasShieldless = this.state.ruleOverrides?.shieldsEnabled === false;
+      this.state.ruleOverrides = normalizeRuleOverrides(this.state.variantId, {
+        ...this.state.ruleOverrides,
+        ...overrides,
+      });
+      if (ruleOverrideClearsEnPassant(overrides)) this.state.enPassant = null;
+      applyShieldOverrideToBoard(this.state, {
+        restoreEligible:
+          options.restoreShields ??
+          (wasShieldless && this.state.ruleOverrides.shieldsEnabled),
+      });
+    });
+  }
+
+  applyDeveloperMutation(mutator, options = {}) {
+    this.cancelAi();
+    mutator();
+    applyShieldOverrideToBoard(this.state, {
+      restoreEligible: Boolean(options.restoreShields),
+    });
+    if (options.clearHistory) {
+      this.state.lastAction = null;
+      this.state.actionHistory = [];
+      this.state.capturedPieces = [];
+      this.undoStack = [];
+      this.lastUndoAnchorKey = null;
+    }
+    this.state.gameOver = null;
+    updateIntimidation(this.state);
+    normalizeTurn(this.state);
+    this.developer.fenText = stateToFen(this.state);
+    this.developer.keepFenDraft = false;
+    this.developer.message = "";
+    this.clearSelection();
+    this.render();
+  }
+
+  async exportFen() {
+    this.developer.fenText = stateToFen(this.state);
+    this.developer.keepFenDraft = false;
+    this.developer.message = "FEN exported.";
+    this.render();
+    if (!(await copyTextToClipboard(this.developer.fenText))) return;
+    this.developer.message = "FEN copied.";
+    this.showDeveloperToast("Copied");
+    this.render();
+  }
+
+  showDeveloperToast(message, durationMs = 1200) {
+    if (this.devToastTimer) globalThis.clearTimeout?.(this.devToastTimer);
+    this.developer.toastMessage = message;
+    this.devToastTimer = globalThis.setTimeout?.(() => {
+      this.developer.toastMessage = "";
+      this.devToastTimer = null;
+      this.render();
+    }, durationMs);
+    this.devToastTimer?.unref?.();
+  }
+
+  importFen() {
+    try {
+      this.cancelAi();
+      const nextState = createStateFromFen(this.developer.fenText, {
+        variantId: this.state.variantId,
+        overrides: this.state.ruleOverrides,
+        referenceState: this.state,
+      });
+      this.rememberBoardEditUndo();
+      this.state = nextState;
+      updateIntimidation(this.state);
+      normalizeTurn(this.state);
+      this.undoStack = [];
+      this.lastUndoAnchorKey = null;
+      this.developer.fenText = stateToFen(this.state);
+      this.developer.keepFenDraft = false;
+      this.developer.message = "FEN imported.";
+      this.clearSelection();
+      this.render();
+    } catch (error) {
+      this.developer.message = errorMessage(error);
+      this.developer.keepFenDraft = true;
+      this.render();
+    }
+  }
+
+  clearBoardForEditing() {
+    this.rememberBoardEditUndo();
+    this.applyDeveloperMutation(() => {
+      this.state.board = createEmptyState(this.state.currentPlayer, {
+        variantId: this.state.variantId,
+        ruleOverrides: this.state.ruleOverrides,
+      }).board;
+      this.state.enPassant = null;
+      this.state.foolMemory = { [COLORS.WHITE]: null, [COLORS.BLACK]: null };
+    }, { clearHistory: true });
+  }
+
+  applyBoardEdit(row, col) {
+    this.rememberBoardEditUndo();
+    this.applyDeveloperMutation(() => {
+      if (!this.developer.editPieceType) {
+        setPiece(this.state.board, row, col, null);
+        return;
+      }
+      setPiece(
+        this.state.board,
+        row,
+        col,
+        createPiece(
+          this.developer.editPieceType,
+          this.developer.editPieceColor,
+          row,
+          col,
+          {
+            hasShield:
+              this.developer.editPieceShield &&
+              this.state.ruleOverrides.shieldsEnabled &&
+              canHaveShield(this.developer.editPieceType),
+            isImmune: this.developer.editPieceImmune,
+            hasMoved: this.developer.editPieceMoved,
+            id: `dev-${Date.now()}-${row}-${col}-${Math.random()
+              .toString(36)
+              .slice(2)}`,
+          },
+        ),
+      );
+      this.state.enPassant = null;
+    }, { clearHistory: true });
   }
 
   clearSelection() {
@@ -544,6 +930,8 @@ export class GameController {
       boardSide: effectivePlayerSide(this.settings),
       sideLocked: this.isPlayingAgainstAi(),
       canUndo: this.canUndo(),
+      developer: this.developer,
+      canUndoBoardEdit: this.canUndoBoardEdit(),
     });
   }
 
@@ -591,6 +979,34 @@ export class GameController {
     this.clearSelection();
     this.render();
   }
+
+  rememberBoardEditUndo() {
+    this.boardEditUndoStack.push(
+      cloneState(this.state, { preserveHistory: false }),
+    );
+    if (this.boardEditUndoStack.length > 40) this.boardEditUndoStack.shift();
+  }
+
+  canUndoBoardEdit() {
+    return !this.isAiRunning && this.boardEditUndoStack.length > 0;
+  }
+
+  undoBoardEdit() {
+    if (!this.canUndoBoardEdit()) return;
+    this.cancelAi();
+    this.state = cloneState(this.boardEditUndoStack.pop(), {
+      preserveHistory: false,
+    });
+    this.undoStack = [];
+    this.lastUndoAnchorKey = null;
+    updateIntimidation(this.state);
+    normalizeTurn(this.state);
+    this.developer.fenText = stateToFen(this.state);
+    this.developer.keepFenDraft = false;
+    this.developer.message = "Board edit undone.";
+    this.clearSelection();
+    this.render();
+  }
 }
 
 function highlightsForActions(state, actions, selectedPiece) {
@@ -599,10 +1015,10 @@ function highlightsForActions(state, actions, selectedPiece) {
     (action) => action.kind === "move" && action.to,
   );
   const moveGroups = groupByDestination(
-    moveActions.filter((action) => action.mode !== "knightRamp"),
+    moveActions.filter((action) => !isRampAction(action)),
   );
   const rampGroups = groupByDestination(
-    moveActions.filter((action) => action.mode === "knightRamp"),
+    moveActions.filter((action) => isRampAction(action)),
   );
 
   for (const [key, candidates] of moveGroups) {
@@ -638,6 +1054,34 @@ function groupByDestination(actions) {
   return groups;
 }
 
+function ruleOverrideClearsEnPassant(overrides = {}) {
+  return [
+    "checkPattern",
+    "pawnBehavior",
+    "pawnInitialMaxStep",
+    "knightMovement",
+    "shieldsEnabled",
+    "frameEnabled",
+    "wraparoundEnabled",
+    "checkmateEnabled",
+  ].some((key) => Object.hasOwn(overrides, key));
+}
+
+async function copyTextToClipboard(text) {
+  const writeText = globalThis.navigator?.clipboard?.writeText;
+  if (typeof writeText !== "function") return false;
+  try {
+    await writeText.call(globalThis.navigator.clipboard, text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeVariantSelectValue(value) {
+  return String(value ?? "").replace(/^custom:/, "");
+}
+
 function movePassesThroughDeath(state, action) {
   if (action.deathLanding) return true;
   return (action.path ?? []).some(
@@ -645,31 +1089,36 @@ function movePassesThroughDeath(state, action) {
   );
 }
 
-function chooseKnightRampAction(candidates) {
-  const bestScore = Math.max(...candidates.map(knightRampRouteScore));
+function isRampAction(action) {
+  return Array.isArray(action?.rampSequence) && action.rampSequence.length > 0;
+}
+
+function chooseRampAction(candidates) {
+  const bestScore = Math.max(...candidates.map(rampRouteScore));
   const bestRoutes = candidates.filter(
-    (action) => knightRampRouteScore(action) === bestScore,
+    (action) => rampRouteScore(action) === bestScore,
   );
-  const shortestLength = Math.min(...bestRoutes.map(knightRampRouteLength));
+  const shortestLength = Math.min(...bestRoutes.map(rampRouteLength));
   const preferred = bestRoutes.filter(
-    (action) => knightRampRouteLength(action) === shortestLength,
+    (action) => rampRouteLength(action) === shortestLength,
   );
   if (preferred.length === 1) return preferred[0];
   return preferred[Math.floor(Math.random() * preferred.length)];
 }
 
-function knightRampRouteLength(action) {
+function rampRouteLength(action) {
   return action.rampSequence?.length ?? 1;
 }
 
-function knightRampRouteScore(action) {
+function rampRouteScore(action) {
   let lifeCount = 0;
   let deathCount = 0;
   for (const step of action.rampSequence ?? []) {
     if (step.rampType === PIECE_TYPES.LIFE) lifeCount += 1;
     if (step.rampType === PIECE_TYPES.DEATH) deathCount += 1;
   }
-  return lifeCount * 100 - deathCount * 1000;
+  const shieldStripCount = action.shieldStrips?.length ?? 0;
+  return shieldStripCount * 220 + lifeCount * 100 - deathCount * 1000;
 }
 
 function uniqueSquareKeys(squares) {
@@ -680,11 +1129,8 @@ function uniqueSquareKeys(squares) {
 
 async function chooseAiActionForUi(state, color, options) {
   if (typeof globalThis.Worker === "function") {
-    const workerOptions = AI_WORKER_SOURCE
-      ? { inlineSource: AI_WORKER_SOURCE }
-      : {};
     try {
-      return await chooseAiActionInWorker(state, color, options, workerOptions);
+      return await chooseAiActionInWorker(state, color, options);
     } catch (error) {
       if (isAiWorkerCancellation(error) || !isAiWorkerStartupFailure(error)) {
         throw error;
@@ -695,18 +1141,15 @@ async function chooseAiActionForUi(state, color, options) {
   return chooseAiActionOnMainThread(state, color, options);
 }
 
-function chooseAiActionInWorker(state, color, options, { inlineSource } = {}) {
+function chooseAiActionInWorker(state, color, options) {
   return new Promise((resolve, reject) => {
-    const workerUrl = inlineSource
-      ? URL.createObjectURL(
-          new Blob([inlineSource], { type: "text/javascript" }),
-        )
-      : new URL("ai-worker.bundle.js", globalThis.location?.href).href;
+    const workerUrl = new URL("../ai-worker.js", import.meta.url).href;
     let worker = null;
     try {
-      worker = new Worker(workerUrl);
+      worker = new Worker(new URL("../ai-worker.js", import.meta.url), {
+        type: "module",
+      });
     } catch (error) {
-      if (inlineSource) URL.revokeObjectURL(workerUrl);
       reject(aiWorkerStartupError(error));
       return;
     }
@@ -719,7 +1162,7 @@ function chooseAiActionInWorker(state, color, options, { inlineSource } = {}) {
     const timer =
       timeoutMs > 1200
         ? setTimeout(() => {
-            cleanupWorker(worker, workerUrl, inlineSource);
+            cleanupWorker(worker);
             reject(new Error("AI worker timed out"));
           }, timeoutMs)
         : null;
@@ -728,7 +1171,6 @@ function chooseAiActionInWorker(state, color, options, { inlineSource } = {}) {
       reject,
       timer,
       url: workerUrl,
-      usesObjectUrl: Boolean(inlineSource),
       worker,
     };
 
@@ -736,7 +1178,7 @@ function chooseAiActionInWorker(state, color, options, { inlineSource } = {}) {
       if (event.data?.id !== id) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      cleanupWorker(worker, workerUrl, inlineSource);
+      cleanupWorker(worker);
       if (event.data.error) {
         reject(new Error(event.data.error));
         return;
@@ -748,7 +1190,7 @@ function chooseAiActionInWorker(state, color, options, { inlineSource } = {}) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      cleanupWorker(worker, workerUrl, inlineSource);
+      cleanupWorker(worker);
       reject(event.error ?? new Error("AI worker failed"));
     };
 
@@ -805,18 +1247,40 @@ let activeAiWorker = null;
 
 function cancelAiWorkerSearch() {
   if (!activeAiWorker) return;
-  const { reject, timer, url, usesObjectUrl, worker } = activeAiWorker;
+  const { reject, timer, worker } = activeAiWorker;
   activeAiWorker = null;
   if (timer) clearTimeout(timer);
   worker.terminate();
-  if (usesObjectUrl) URL.revokeObjectURL(url);
   reject(new Error("AI worker cancelled"));
 }
 
-function cleanupWorker(worker, url, inlineSource) {
+function cleanupWorker(worker) {
   if (activeAiWorker?.worker === worker) activeAiWorker = null;
   worker.terminate();
-  if (inlineSource) URL.revokeObjectURL(url);
+}
+
+async function clearBrowserRuntimeCaches() {
+  const cacheStorage = globalThis.caches;
+  if (cacheStorage?.keys && cacheStorage?.delete) {
+    try {
+      const names = await cacheStorage.keys();
+      await Promise.all(names.map((name) => cacheStorage.delete(name)));
+    } catch {
+      // Best-effort browser cache cleanup before reload.
+    }
+  }
+
+  const serviceWorker = globalThis.navigator?.serviceWorker;
+  if (serviceWorker?.getRegistrations) {
+    try {
+      const registrations = await serviceWorker.getRegistrations();
+      await Promise.all(
+        registrations.map((registration) => registration.unregister()),
+      );
+    } catch {
+      // No service worker is required for this app.
+    }
+  }
 }
 
 function delay(ms) {

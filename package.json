@@ -4,14 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "bundle": "bun scripts/build-bundle.js",
-    "dev": "bun run bundle && bunx --bun vite --host 127.0.0.1",
-    "build": "bun run bundle && bunx --bun vite build",
+    "dev": "bunx --bun vite --host 127.0.0.1",
+    "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview --host 127.0.0.1",
     "test": "bun test",
-    "check": "bun test && bun run bundle && bunx --bun vite build"
+    "check": "bun test && bun run build"
   },
   "devDependencies": {
-    "vite": "^8.0.10"
+    "vite": "^8.0.12"
   }
 }

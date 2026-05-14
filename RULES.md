@@ -102,6 +102,7 @@ Ramp rules:
 - A Knight may make up to two ramp jumps in one standard move.
 - A Knight cannot land on a square it already occupied during the current move.
 - Knights cannot use their L-shaped pattern to move to an empty square. Their non-attacking moves to empty squares come only from ramp jumps.
+- For any variant or rule override that permits an empty-square L-shaped Knight move, that move uses the same two orthogonal bend squares as a Knight L-shaped attack for Life/Death pass-through effects.
 
 ## Castling And Check
 
@@ -190,6 +191,7 @@ Knight attack example:
 - If the Pawn on `d4` has a Shield, the Shield is removed and the Knight ends on the chosen staging square.
 - If the Pawn on `d4` has no Shield, no staging choice is made. The Pawn is removed and the Knight must rest on `d4`.
 - If the Knight's killing-blow path crosses Life or Death squares, those pass-through effects still apply. For example, a Knight attacking from `c5` to a shieldless target on `d7` passes through `c6` and `d6`; Death on `c6` removes the Knight's Shield or destroys it after the target is removed.
+- Knight shield-break attacks use the same bend-square pass-through path before the chosen staging square resolves. A Life or Death piece on either bend square applies its pass-through effect unless that square is the selected Death-occupied staging square, which remains fatal after the Shield break.
 
 ## AI And Engine Expectations
 

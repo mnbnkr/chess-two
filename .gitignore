@@ -3,4 +3,5 @@ dist/
 coverage/
 .vite/
 *.log
-.notes.txt
+.notes.md
+AGENTS.md

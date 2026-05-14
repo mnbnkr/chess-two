@@ -7,23 +7,33 @@ import {
   PROMOTION_TYPES,
   STANDARD_PIECES,
   canHaveShield,
-  isDarkSquare,
-  isLightSquare,
+  isFrameSquare,
   isPromotionRank,
   oppositeColor,
 } from "./constants.js";
 import {
   allPieces,
+  checkmateEnabledForState,
   cloneState,
   createInitialState,
   findPieceById,
   getPiece,
+  isDarkSquareForState,
+  isLightSquareForState,
   isValidSquare,
   movePiece,
+  normalizeFrameShields,
   ownerOf,
   removePiece,
+  ruleOverridesForState,
   setPiece,
+  shieldsEnabledForState,
+  syncFrameShieldForSquare,
 } from "./state.js";
+import {
+  KNIGHT_MOVEMENTS,
+  PAWN_BEHAVIORS,
+} from "../variants/index.js";
 
 const ROOK_DIRS = [
   [0, 1],
@@ -48,8 +58,8 @@ const KNIGHT_DELTAS = [
   [2, 1],
 ];
 
-export function createGameState() {
-  const state = createInitialState();
+export function createGameState(options = {}) {
+  const state = createInitialState(options);
   updateIntimidation(state);
   normalizeTurn(state);
   return state;
@@ -70,9 +80,13 @@ export function actionKey(action) {
     action.staging ? squareKey(action.staging) : "",
     action.rest ? squareKey(action.rest) : "",
     action.promotionType ?? "",
+    action.profileType ?? "",
+    action.recoil ? "recoil" : "",
     action.rookId ?? "",
     action.deathLanding ? "deathLanding" : "",
     rampSequenceKey(action.rampSequence),
+    shieldStripKey(action.shieldStrips),
+    pathKey(action.path),
   ];
   return bits.join("|");
 }
@@ -180,12 +194,58 @@ function buildSkipSpecialAction(state, color) {
 
 function canSkipSpecialMoveFromActions(state, color, actions) {
   if (state.gameOver || state.currentPlayer !== color) return false;
-  if (isKingInCheck(state, color)) return false;
+  if (usesCheckmate(state) && isKingInCheck(state, color)) return false;
   if (!state.turn.standardMoveMade || state.turn.specialMoveMade) return false;
   return actions.some((action) => action.consumes?.special);
 }
 
+function pawnBehavior(state) {
+  return ruleOverridesForState(state).pawnBehavior;
+}
+
+function knightMovement(state) {
+  return ruleOverridesForState(state).knightMovement;
+}
+
+function pawnInitialMaxStep(state) {
+  return ruleOverridesForState(state).pawnInitialMaxStep;
+}
+
+function usesFrontalFanMoves(state) {
+  return [
+    PAWN_BEHAVIORS.FRONTAL_FAN,
+    PAWN_BEHAVIORS.FRONTAL_FAN_2,
+  ].includes(pawnBehavior(state));
+}
+
+function usesFrontalFan2Pawns(state) {
+  return pawnBehavior(state) === PAWN_BEHAVIORS.FRONTAL_FAN_2;
+}
+
+function usesOrthodoxKnightMoves(state) {
+  return knightMovement(state) === KNIGHT_MOVEMENTS.ORTHODOX;
+}
+
+function usesFrame(state) {
+  if (typeof state?.ruleOverrides?.frameEnabled === "boolean")
+    return state.ruleOverrides.frameEnabled;
+  return ruleOverridesForState(state).frameEnabled;
+}
+
+function usesWraparound(state) {
+  if (typeof state?.ruleOverrides?.wraparoundEnabled === "boolean")
+    return state.ruleOverrides.wraparoundEnabled;
+  return ruleOverridesForState(state).wraparoundEnabled;
+}
+
+function usesCheckmate(state) {
+  if (typeof state?.ruleOverrides?.checkmateEnabled === "boolean")
+    return state.ruleOverrides.checkmateEnabled;
+  return checkmateEnabledForState(state);
+}
+
 function filterCheckLegalActions(state, color, actions) {
+  if (!usesCheckmate(state)) return actions;
   const inCheck = isKingInCheck(state, color);
   if (inCheck && !hasLegalCheckEvasionSequence(state, color, actions))
     return [];
@@ -195,7 +255,8 @@ function filterCheckLegalActions(state, color, actions) {
 }
 
 function isActionLegalRegardingCheck(state, color, action, inCheck) {
-  if (action.target?.type === PIECE_TYPES.KING) return false;
+  if (action.target?.type === PIECE_TYPES.KING && usesCheckmate(state))
+    return false;
 
   if (inCheck) {
     if (isPreparatoryLifeDeathMove(state, action))
@@ -245,7 +306,12 @@ function isKingInCheckAt(state, king, square) {
 }
 
 function generateStandardMoves(state, piece) {
-  switch (piece.type) {
+  if (piece.type === PIECE_TYPES.FOOL) return generateFoolMoves(state, piece);
+  return generateProfileMoves(state, piece, piece.type);
+}
+
+function generateProfileMoves(state, piece, profileType) {
+  switch (profileType) {
     case PIECE_TYPES.PAWN:
       return generatePawnMoves(state, piece);
     case PIECE_TYPES.ROOK:
@@ -258,17 +324,29 @@ function generateStandardMoves(state, piece) {
       return generateKingMoves(state, piece);
     case PIECE_TYPES.KNIGHT:
       return generateKnightMoves(state, piece);
+    case PIECE_TYPES.TOAD:
+      return generateToadMoves(state, piece);
     default:
       return [];
   }
 }
 
 function generatePawnMoves(state, piece) {
+  if (usesFrontalFanMoves(state))
+    return generateFrontalFanPawnMoves(state, piece);
+  return generateChessTwoPawnMoves(state, piece);
+}
+
+function generateChessTwoPawnMoves(state, piece) {
   const actions = [];
   const dir = pawnDirection(piece);
   const startRow = piece.color === COLORS.WHITE ? 8 : 1;
   const continuationRow = piece.color === COLORS.WHITE ? 7 : 2;
-  const maxStep = !piece.hasMoved ? 3 : piece.row === continuationRow ? 2 : 1;
+  const maxStep = !piece.hasMoved
+    ? pawnInitialMaxStep(state)
+    : piece.row === continuationRow
+      ? 2
+      : 1;
 
   for (let step = 1; step <= maxStep; step++) {
     const to = { r: piece.row + dir * step, c: piece.col };
@@ -285,7 +363,7 @@ function generatePawnMoves(state, piece) {
       pieceType: piece.type,
       from: { r: piece.row, c: piece.col },
       to,
-      path: pawnPath(piece, step),
+      path: pawnPath(state, piece, step),
       deathLanding,
       consumes: { standard: true, special: false },
       enPassantOpportunity:
@@ -293,7 +371,7 @@ function generatePawnMoves(state, piece) {
           ? {
               from: { r: piece.row, c: piece.col },
               to,
-              crossed: pawnPath(piece, step),
+              crossed: pawnPath(state, piece, step),
               eligibleColor: oppositeColor(piece.color),
             }
           : null,
@@ -329,6 +407,71 @@ function generatePawnMoves(state, piece) {
   return actions.map(withActionId);
 }
 
+function generateFrontalFanPawnMoves(state, piece) {
+  const actions = [];
+  const maxStep = frontalFanPawnMaxStep(state, piece);
+
+  for (const dc of [-1, 0, 1]) {
+    for (let step = 1; step <= maxStep; step++) {
+      if (
+        dc !== 0 &&
+        step > 1 &&
+        isFrontalFanDiagonalLeapBlocked(state, piece)
+      )
+        continue;
+      const to = pawnLaneSquare(state, piece, step, dc);
+      if (!to) continue;
+      const occupant = getPiece(state.board, to.r, to.c);
+      const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+      if (occupant && !deathLanding) continue;
+      const path = pawnLanePath(state, piece, step, dc);
+      if (!isPawnLanePathClear(state, path)) continue;
+      const action = {
+        kind: "move",
+        mode: "pawnAdvance",
+        pieceId: piece.id,
+        pieceType: piece.type,
+        from: { r: piece.row, c: piece.col },
+        to,
+        path,
+        deathLanding,
+        consumes: { standard: true, special: false },
+        enPassantOpportunity:
+          !deathLanding && step > 1
+            ? {
+                from: { r: piece.row, c: piece.col },
+                to,
+                crossed: path,
+                eligibleColor: oppositeColor(piece.color),
+              }
+            : null,
+      };
+      actions.push(
+        ...(deathLanding ? [action] : promotionVariants(state, piece, action)),
+      );
+    }
+  }
+
+  return actions.map(withActionId);
+}
+
+function isFrontalFanDiagonalLeapBlocked(state, piece) {
+  const directlyForward = physicalSquareFromDelta(
+    { r: piece.row, c: piece.col },
+    pawnDirection(piece),
+    0,
+  );
+  const blocker = directlyForward
+    ? getPiece(state.board, directlyForward.r, directlyForward.c)
+    : null;
+  return Boolean(blocker && STANDARD_PIECES.has(blocker.type));
+}
+
+function frontalFanPawnMaxStep(state, piece) {
+  if (piece.hasMoved) return 1;
+  return pawnInitialMaxStep(state);
+}
+
 function isPawnForwardPathPassable(state, piece, step) {
   const dir = pawnDirection(piece);
   for (let i = 1; i < step; i++) {
@@ -338,21 +481,42 @@ function isPawnForwardPathPassable(state, piece, step) {
   return true;
 }
 
-function pawnPath(piece, step) {
-  const dir = pawnDirection(piece);
+function isPawnLanePathClear(state, path) {
+  return path.every((square) => {
+    return !getPiece(state.board, square.r, square.c);
+  });
+}
+
+function pawnPath(state, piece, step) {
+  return pawnLanePath(state, piece, step, 0);
+}
+
+function pawnLanePath(state, piece, step, dc = 0, options = {}) {
   const path = [];
   for (let i = 1; i < step; i++) {
-    path.push({ r: piece.row + dir * i, c: piece.col });
+    const square = pawnLaneSquare(state, piece, i, dc, options);
+    if (square) path.push(square);
   }
   return path;
 }
 
+function pawnLaneSquare(state, piece, step, dc = 0, options = {}) {
+  const row = piece.row + pawnDirection(piece) * step;
+  const rawCol = piece.col + dc;
+  if (row < 0 || row >= BOARD_SIZE) return null;
+  if (options.allowWrap !== false && usesWraparound(state))
+    return { r: row, c: mod(rawCol, BOARD_SIZE) };
+  if (rawCol < 0 || rawCol >= BOARD_SIZE) return null;
+  return { r: row, c: rawCol };
+}
+
 function generateSlidingMoves(state, piece, directions) {
   const actions = [];
+  const from = { r: piece.row, c: piece.col };
   for (const [dr, dc] of directions) {
     for (let distance = 1; distance < BOARD_SIZE; distance++) {
-      const to = { r: piece.row + dr * distance, c: piece.col + dc * distance };
-      if (!isValidSquare(to.r, to.c)) break;
+      const to = squareFromDelta(state, from, dr, dc, distance);
+      if (!to) break;
       const occupant = getPiece(state.board, to.r, to.c);
       if (occupant) {
         if (occupant.type === PIECE_TYPES.DEATH) {
@@ -362,9 +526,9 @@ function generateSlidingMoves(state, piece, directions) {
               mode: "slide",
               pieceId: piece.id,
               pieceType: piece.type,
-              from: { r: piece.row, c: piece.col },
+              from,
               to,
-              path: linePath({ r: piece.row, c: piece.col }, to),
+              path: rayPath(state, from, dr, dc, distance),
               deathLanding: true,
               consumes: { standard: true, special: false },
             }),
@@ -380,15 +544,15 @@ function generateSlidingMoves(state, piece, directions) {
           mode: "slide",
           pieceId: piece.id,
           pieceType: piece.type,
-          from: { r: piece.row, c: piece.col },
+          from,
           to,
-          path: linePath({ r: piece.row, c: piece.col }, to),
+          path: rayPath(state, from, dr, dc, distance),
           consumes: { standard: true, special: false },
         }),
       );
     }
   }
-  return actions;
+  return preferEquivalentMoveRoutes(state, actions);
 }
 
 function generateKingMoves(state, piece) {
@@ -396,8 +560,12 @@ function generateKingMoves(state, piece) {
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
-      const to = { r: piece.row + dr, c: piece.col + dc };
-      if (!isValidSquare(to.r, to.c)) continue;
+      const to = physicalSquareFromDelta(
+        { r: piece.row, c: piece.col },
+        dr,
+        dc,
+      );
+      if (!to) continue;
       const occupant = getPiece(state.board, to.r, to.c);
       if (occupant?.type === PIECE_TYPES.DEATH) continue;
       if (occupant) continue;
@@ -420,18 +588,36 @@ function generateKingMoves(state, piece) {
 }
 
 function generateKnightMoves(state, piece) {
+  if (usesOrthodoxKnightMoves(state))
+    return generateOrthodoxKnightMoves(state, piece);
+  return generateRampMoves(state, piece, "knightRamp");
+}
+
+function generateToadMoves(state, piece) {
+  return [
+    ...generateToadStepMoves(state, piece),
+    ...generateRampMoves(state, piece, "toadRamp"),
+  ];
+}
+
+function generateRampMoves(state, piece, mode) {
   const actions = [];
-  for (const jump of knightRampDestinations(state, piece)) {
+  for (const jump of rampDestinations(state, piece)) {
     actions.push(
       withActionId({
         kind: "move",
-        mode: "knightRamp",
+        mode,
         pieceId: piece.id,
         pieceType: piece.type,
         from: { r: piece.row, c: piece.col },
         to: { r: jump.r, c: jump.c },
         rampSequence: jump.sequence,
         path: jump.sequence.map((step) => ({ ...step.ramp })),
+        deathLanding: jump.deathLanding,
+        shieldStrips:
+          mode === "toadRamp"
+            ? toadRampShieldStrips(state, piece, jump.sequence)
+            : [],
         consumes: { standard: true, special: false },
       }),
     );
@@ -440,7 +626,60 @@ function generateKnightMoves(state, piece) {
   return dedupeActions(actions);
 }
 
-function knightRampDestinations(state, piece) {
+function generateOrthodoxKnightMoves(state, piece) {
+  const actions = [];
+  for (const [dr, dc] of KNIGHT_DELTAS) {
+    const to = squareFromDelta(state, { r: piece.row, c: piece.col }, dr, dc);
+    if (!to) continue;
+    const occupant = getPiece(state.board, to.r, to.c);
+    const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+    if (occupant && !deathLanding) continue;
+    actions.push(
+      withActionId({
+        kind: "move",
+        mode: "knightMove",
+        pieceId: piece.id,
+        pieceType: piece.type,
+        from: { r: piece.row, c: piece.col },
+        to,
+        path: knightPassThroughSquares(state, piece, [dr, dc]),
+        deathLanding,
+        consumes: { standard: true, special: false },
+      }),
+    );
+  }
+  return actions;
+}
+
+function generateToadStepMoves(state, piece) {
+  const actions = [];
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const to = squareFromDelta(state, { r: piece.row, c: piece.col }, dr, dc);
+      if (!to) continue;
+      const occupant = getPiece(state.board, to.r, to.c);
+      const deathLanding = occupant?.type === PIECE_TYPES.DEATH;
+      if (occupant && !deathLanding) continue;
+      actions.push(
+        withActionId({
+          kind: "move",
+          mode: "toadStep",
+          pieceId: piece.id,
+          pieceType: piece.type,
+          from: { r: piece.row, c: piece.col },
+          to,
+          path: [],
+          deathLanding,
+          consumes: { standard: true, special: false },
+        }),
+      );
+    }
+  }
+  return actions;
+}
+
+function rampDestinations(state, piece) {
   const results = [];
   const seenRoutes = new Set();
   const original = { r: piece.row, c: piece.col };
@@ -451,10 +690,13 @@ function knightRampDestinations(state, piece) {
     seenRoutes.add(key);
     results.push({
       ...land,
+      deathLanding: sequence.at(-1)?.deathLanding ?? false,
       sequence: sequence.map((step) => ({
         ramp: { ...step.ramp },
         land: { ...step.land },
         rampType: step.rampType,
+        rampPieceId: step.rampPieceId,
+        deathLanding: step.deathLanding,
       })),
     });
   };
@@ -464,15 +706,22 @@ function knightRampDestinations(state, piece) {
     for (let dr = -1; dr <= 1; dr++) {
       for (let dc = -1; dc <= 1; dc++) {
         if (dr === 0 && dc === 0) continue;
-        const ramp = { r: from.r + dr, c: from.c + dc };
-        const land = { r: from.r + dr * 2, c: from.c + dc * 2 };
-        if (!isValidSquare(ramp.r, ramp.c) || !isValidSquare(land.r, land.c))
-          continue;
+        const ramp = squareFromDelta(state, from, dr, dc);
+        const land = squareFromDelta(state, from, dr, dc, 2);
+        if (!ramp || !land) continue;
         const rampPiece = getPiece(state.board, ramp.r, ramp.c);
         if (!rampPiece) continue;
         if (visited.has(squareKey(land))) continue;
-        if (getPiece(state.board, land.r, land.c)) continue;
-        jumps.push({ land, ramp, rampType: rampPiece.type });
+        const landOccupant = getPiece(state.board, land.r, land.c);
+        const deathLanding = landOccupant?.type === PIECE_TYPES.DEATH;
+        if (landOccupant && !deathLanding) continue;
+        jumps.push({
+          land,
+          ramp,
+          rampType: rampPiece.type,
+          rampPieceId: rampPiece.id,
+          deathLanding,
+        });
       }
     }
     return jumps;
@@ -482,18 +731,60 @@ function knightRampDestinations(state, piece) {
   for (const first of singleJumps(original, firstVisited)) {
     const firstKey = squareKey(first.land);
     pushRoute(first.land, [
-      { ramp: first.ramp, land: first.land, rampType: first.rampType },
+      {
+        ramp: first.ramp,
+        land: first.land,
+        rampType: first.rampType,
+        rampPieceId: first.rampPieceId,
+        deathLanding: first.deathLanding,
+      },
     ]);
 
+    if (first.deathLanding) continue;
     const secondVisited = new Set([squareKey(original), firstKey]);
     for (const second of singleJumps(first.land, secondVisited)) {
       pushRoute(second.land, [
-        { ramp: first.ramp, land: first.land, rampType: first.rampType },
-        { ramp: second.ramp, land: second.land, rampType: second.rampType },
+        {
+          ramp: first.ramp,
+          land: first.land,
+          rampType: first.rampType,
+          rampPieceId: first.rampPieceId,
+          deathLanding: first.deathLanding,
+        },
+        {
+          ramp: second.ramp,
+          land: second.land,
+          rampType: second.rampType,
+          rampPieceId: second.rampPieceId,
+          deathLanding: second.deathLanding,
+        },
       ]);
     }
   }
   return results;
+}
+
+function toadRampShieldStrips(state, piece, sequence) {
+  return sequence
+    .map((step, index) => {
+      const rampPiece =
+        (step.rampPieceId ? findPieceById(state, step.rampPieceId) : null) ??
+        getPiece(state.board, step.ramp.r, step.ramp.c);
+      if (
+        !rampPiece ||
+        rampPiece.isImmune ||
+        !rampPiece.hasShield ||
+        ownerOf(rampPiece) === ownerOf(piece)
+      ) {
+        return null;
+      }
+      return {
+        pieceId: rampPiece.id,
+        square: { ...step.ramp },
+        pathIndex: index,
+      };
+    })
+    .filter(Boolean);
 }
 
 function generateCastles(state, king) {
@@ -556,36 +847,110 @@ function generateCastles(state, king) {
 }
 
 function generateStandardAttacks(state, piece, options = {}) {
-  if (piece.type === PIECE_TYPES.PAWN) {
+  if (piece.type === PIECE_TYPES.FOOL)
+    return generateFoolAttacks(state, piece, options);
+  return generateProfileAttacks(state, piece, piece.type, options);
+}
+
+function generateProfileAttacks(state, piece, profileType, options = {}) {
+  if (profileType === PIECE_TYPES.PAWN) {
     return [
       ...generatePawnAttacks(state, piece, options),
       ...generateEnPassantActions(state, piece),
     ];
   }
-  if (piece.type === PIECE_TYPES.KING)
+  if (profileType === PIECE_TYPES.KING)
     return generateKingAttacks(state, piece, options);
-  if (piece.type === PIECE_TYPES.KNIGHT)
+  if (profileType === PIECE_TYPES.KNIGHT)
     return generateKnightAttacks(state, piece, options);
-  if (piece.type === PIECE_TYPES.ROOK)
+  if (profileType === PIECE_TYPES.ROOK)
     return generateSlidingAttacks(state, piece, ROOK_DIRS, options);
-  if (piece.type === PIECE_TYPES.BISHOP)
+  if (profileType === PIECE_TYPES.BISHOP)
     return generateSlidingAttacks(state, piece, BISHOP_DIRS, options);
-  if (piece.type === PIECE_TYPES.QUEEN)
+  if (profileType === PIECE_TYPES.QUEEN)
     return generateSlidingAttacks(
       state,
       piece,
       [...ROOK_DIRS, ...BISHOP_DIRS],
       options,
     );
+  if (profileType === PIECE_TYPES.TOAD)
+    return generateToadAttacks(state, piece, options);
   return [];
 }
 
+function generateFoolMoves(state, fool) {
+  const profile = foolProfileForState(state, fool);
+  if (!profile) return [];
+  const proxy = profileProxy(fool, profile.type);
+  return generateProfileMoves(state, proxy, profile.type).map((action) =>
+    foolAction(action, profile),
+  );
+}
+
+function generateFoolAttacks(state, fool, options = {}) {
+  const profile = foolProfileForState(state, fool);
+  if (!profile) return [];
+  const proxy = profileProxy(fool, profile.type);
+  const actions =
+    profile.type === PIECE_TYPES.PAWN
+      ? generatePawnAttacks(state, proxy, options)
+      : generateProfileAttacks(state, proxy, profile.type, options);
+  return actions.map((action) => foolAction(action, profile));
+}
+
+export function foolProfileForState(state, fool) {
+  if (!state || !fool?.type || fool.type !== PIECE_TYPES.FOOL) return null;
+  const profile = state.foolMemory?.[oppositeColor(fool.color)];
+  if (!profile || profile.type === PIECE_TYPES.FOOL) return null;
+  if (!STANDARD_PIECES.has(profile.type)) return null;
+  return { type: profile.type };
+}
+
+function profileProxy(piece, type) {
+  return {
+    ...piece,
+    type,
+    copiedByFool: true,
+  };
+}
+
+function foolAction(action, profile) {
+  const next = {
+    ...action,
+    id: undefined,
+    pieceType: PIECE_TYPES.FOOL,
+    profileType: profile.type,
+    copiedProfile: { type: profile.type },
+  };
+  delete next.id;
+  delete next.promotionType;
+  delete next.enPassantOpportunity;
+  return withActionId(next);
+}
+
 function generatePawnAttacks(state, piece, options = {}) {
+  if (usesFrontalFan2Pawns(state))
+    return generateFrontalFanPawnAttacks(state, piece, options);
+  return generateChessTwoPawnAttacks(state, piece, options);
+}
+
+function generateChessTwoPawnAttacks(state, piece, options = {}) {
   const actions = [];
   const dir = pawnDirection(piece);
   for (const dc of [-1, 1]) {
-    const target = getPiece(state.board, piece.row + dir, piece.col + dc);
-    if (!isAttackTarget(piece, target, options)) continue;
+    const targetSquare = squareFromDelta(
+      state,
+      { r: piece.row, c: piece.col },
+      dir,
+      dc,
+      1,
+      { allowWrap: false },
+    );
+    const target = targetSquare
+      ? getPiece(state.board, targetSquare.r, targetSquare.c)
+      : null;
+    if (!isAttackTarget(state, piece, target, options)) continue;
     actions.push(
       ...buildAttackActions(
         state,
@@ -601,6 +966,37 @@ function generatePawnAttacks(state, piece, options = {}) {
         },
       ),
     );
+  }
+  return actions;
+}
+
+function generateFrontalFanPawnAttacks(state, piece, options = {}) {
+  const actions = [];
+  const maxStep = frontalFanPawnMaxStep(state, piece);
+  for (const dc of [-1, 0, 1]) {
+    for (let step = 1; step <= maxStep; step++) {
+      const targetSquare = pawnLaneSquare(state, piece, step, dc, {
+        allowWrap: false,
+      });
+      if (!targetSquare) continue;
+      const target = getPiece(state.board, targetSquare.r, targetSquare.c);
+      if (!isAttackTarget(state, piece, target, options)) continue;
+      const path = pawnLanePath(state, piece, step, dc, { allowWrap: false });
+      if (!isPawnLanePathClear(state, path)) continue;
+      const staging =
+        step === 1
+          ? { r: piece.row, c: piece.col }
+          : pawnLaneSquare(state, piece, step - 1, dc, { allowWrap: false });
+      if (!staging) continue;
+      actions.push(
+        ...buildAttackActions(state, piece, target, staging, {
+          mode: "pawnAttack",
+          path,
+          killPath: path,
+          recoil: true,
+        }),
+      );
+    }
   }
   return actions;
 }
@@ -623,10 +1019,8 @@ function generateEnPassantActions(state, piece) {
     return [];
 
   const actions = [];
-  const dir = pawnDirection(piece);
   for (const crossed of ep.crossed) {
-    if (crossed.r !== piece.row + dir || Math.abs(crossed.c - piece.col) !== 1)
-      continue;
+    if (!pawnCanAttackEnPassantSquare(state, piece, crossed)) continue;
     const crossedOccupant = getPiece(state.board, crossed.r, crossed.c);
     if (crossedOccupant && crossedOccupant.type !== PIECE_TYPES.DEATH) continue;
     actions.push(
@@ -634,19 +1028,56 @@ function generateEnPassantActions(state, piece) {
         mode: "enPassant",
         path: [],
         killPath: crossedOccupant ? [{ r: crossed.r, c: crossed.c }] : [],
+        recoil: usesFrontalFan2Pawns(state),
       }),
     );
   }
   return actions;
 }
 
+function pawnCanAttackEnPassantSquare(state, piece, square) {
+  const dir = pawnDirection(piece);
+  const dr = square.r - piece.row;
+  const dc = square.c - piece.col;
+  if (usesFrontalFan2Pawns(state)) {
+    if (dr % dir !== 0) return false;
+    const step = dr / dir;
+    const maxStep = frontalFanPawnMaxStep(state, piece);
+    if (step < 1 || step > maxStep) return false;
+    if (![-1, 0, 1].includes(dc)) return false;
+    return isPawnLanePathClear(state, pawnLanePath(state, piece, step, dc));
+  }
+  return dr === dir && Math.abs(dc) === 1;
+}
+
 function generateKingAttacks(state, piece, options = {}) {
+  return generateAdjacentAttacks(state, piece, "kingAttack", {
+    ...options,
+    allowWrap: false,
+  });
+}
+
+function generateToadAttacks(state, piece, options = {}) {
+  return generateAdjacentAttacks(state, piece, "toadAttack", options);
+}
+
+function generateAdjacentAttacks(state, piece, mode, options = {}) {
   const actions = [];
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
-      const target = getPiece(state.board, piece.row + dr, piece.col + dc);
-      if (!isAttackTarget(piece, target, options)) continue;
+      const targetSquare = squareFromDelta(
+        state,
+        { r: piece.row, c: piece.col },
+        dr,
+        dc,
+        1,
+        { allowWrap: false },
+      );
+      const target = targetSquare
+        ? getPiece(state.board, targetSquare.r, targetSquare.c)
+        : null;
+      if (!isAttackTarget(state, piece, target, options)) continue;
       actions.push(
         ...buildAttackActions(
           state,
@@ -656,13 +1087,13 @@ function generateKingAttacks(state, piece, options = {}) {
             r: piece.row,
             c: piece.col,
           },
-          {
-            mode: "kingAttack",
-            path: [],
-          },
-        ),
-      );
-    }
+        {
+          mode,
+          path: [],
+        },
+      ),
+    );
+  }
   }
   return actions;
 }
@@ -670,8 +1101,18 @@ function generateKingAttacks(state, piece, options = {}) {
 function generateKnightAttacks(state, piece, options = {}) {
   const actions = [];
   for (const [dr, dc] of KNIGHT_DELTAS) {
-    const target = getPiece(state.board, piece.row + dr, piece.col + dc);
-    if (!isAttackTarget(piece, target, options)) continue;
+    const targetSquare = squareFromDelta(
+      state,
+      { r: piece.row, c: piece.col },
+      dr,
+      dc,
+      1,
+      { allowWrap: false },
+    );
+    const target = targetSquare
+      ? getPiece(state.board, targetSquare.r, targetSquare.c)
+      : null;
+    if (!isAttackTarget(state, piece, target, options)) continue;
     if (!target.hasShield) {
       actions.push(
         ...buildAttackActions(
@@ -684,17 +1125,17 @@ function generateKnightAttacks(state, piece, options = {}) {
           },
           {
             mode: "knightAttack",
-            path: knightPassThroughSquares(piece, target),
+            path: knightPassThroughSquares(state, piece, [dr, dc]),
           },
         ),
       );
       continue;
     }
-    for (const staging of knightStagingSquares(state, piece, target)) {
+    for (const staging of knightStagingSquares(state, piece, target, [dr, dc])) {
       actions.push(
         ...buildAttackActions(state, piece, target, staging, {
           mode: "knightAttack",
-          path: linePath({ r: piece.row, c: piece.col }, staging),
+          path: knightPathToStaging(state, piece, staging, [dr, dc]),
         }),
       );
     }
@@ -704,21 +1145,25 @@ function generateKnightAttacks(state, piece, options = {}) {
 
 function generateSlidingAttacks(state, piece, directions, options = {}) {
   const actions = [];
+  const from = { r: piece.row, c: piece.col };
   for (const [dr, dc] of directions) {
     for (let distance = 1; distance < BOARD_SIZE; distance++) {
-      const target = getPiece(
-        state.board,
-        piece.row + dr * distance,
-        piece.col + dc * distance,
-      );
+      const targetSquare = squareFromDelta(state, from, dr, dc, distance, {
+        allowWrap: false,
+      });
+      if (!targetSquare) break;
+      const target = getPiece(state.board, targetSquare.r, targetSquare.c);
       if (!target) continue;
       if (LIFE_DEATH_PIECES.has(target.type)) continue;
-      if (!isAttackTarget(piece, target, options)) break;
+      if (!isAttackTarget(state, piece, target, options)) break;
 
-      const staging = {
-        r: target.row - dr,
-        c: target.col - dc,
-      };
+      const staging =
+        distance === 1
+          ? from
+          : squareFromDelta(state, from, dr, dc, distance - 1, {
+              allowWrap: false,
+            });
+      if (!staging) break;
       if (staging.r !== piece.row || staging.c !== piece.col) {
         const stagingOccupant = getPiece(state.board, staging.r, staging.c);
         if (target.hasShield) {
@@ -734,11 +1179,12 @@ function generateSlidingAttacks(state, piece, directions, options = {}) {
       actions.push(
         ...buildAttackActions(state, piece, target, staging, {
           mode: "rangedAttack",
-          path: linePath({ r: piece.row, c: piece.col }, staging),
-          killPath: linePath(
-            { r: piece.row, c: piece.col },
-            { r: target.row, c: target.col },
-          ),
+          path: rayPath(state, from, dr, dc, distance - 1, {
+            allowWrap: false,
+          }),
+          killPath: rayPath(state, from, dr, dc, distance, {
+            allowWrap: false,
+          }),
         }),
       );
       break;
@@ -747,10 +1193,14 @@ function generateSlidingAttacks(state, piece, directions, options = {}) {
   return actions;
 }
 
-function isAttackTarget(attacker, target, options = {}) {
+function isAttackTarget(state, attacker, target, options = {}) {
   if (!target || target.isImmune) return false;
   if (LIFE_DEATH_PIECES.has(target.type)) return false;
-  if (target.type === PIECE_TYPES.KING && !options.allowKingTarget)
+  if (
+    target.type === PIECE_TYPES.KING &&
+    !options.allowKingTarget &&
+    usesCheckmate(state)
+  )
     return false;
   return ownerOf(target) !== ownerOf(attacker);
 }
@@ -759,6 +1209,20 @@ function buildAttackActions(state, attacker, target, staging, details) {
   if (!isValidSquare(staging.r, staging.c)) return [];
   const targetSquare = { r: target.row, c: target.col };
   const isKillingBlow = !target.hasShield;
+  const attackPath = isKillingBlow
+    ? (details.killPath ?? details.path ?? [])
+    : (details.path ?? []);
+  if (
+    frameBlocksStandardAttack(
+      state,
+      attacker,
+      target,
+      staging,
+      attackPath,
+      details.mode,
+    )
+  )
+    return [];
   const stagingOccupant = isKillingBlow
     ? null
     : getPiece(state.board, staging.r, staging.c);
@@ -792,10 +1256,9 @@ function buildAttackActions(state, attacker, target, staging, details) {
     },
     from: { r: attacker.row, c: attacker.col },
     to: { r: target.row, c: target.col },
-    path: isKillingBlow
-      ? (details.killPath ?? details.path ?? [])
-      : (details.path ?? []),
+    path: attackPath,
     deathStaging: isDeathStaging,
+    recoil: Boolean(details.recoil),
     consumes: { standard: true, special: false },
   };
 
@@ -824,9 +1287,46 @@ function buildAttackActions(state, attacker, target, staging, details) {
   }).map(withActionId);
 }
 
-function knightStagingSquares(state, knight, target) {
-  const dr = target.row - knight.row;
-  const dc = target.col - knight.col;
+function frameBlocksStandardAttack(
+  state,
+  attacker,
+  target,
+  staging,
+  path = [],
+  mode = "",
+) {
+  if (!usesFrame(state) || attacker.type === PIECE_TYPES.KING)
+    return false;
+  if (isFrameSquare(attacker.row, attacker.col)) return true;
+  const isKnightFrameTarget =
+    mode === "knightAttack" && isFrameSquare(target.row, target.col);
+  if (
+    path.some(
+      (square) =>
+        isFrameSquare(square.r, square.c) &&
+        !(square.r === target.row && square.c === target.col) &&
+        !isKnightFrameTarget,
+    )
+  )
+    return true;
+  const stagingIsOrigin =
+    staging.r === attacker.row && staging.c === attacker.col;
+  const stagingIsTarget =
+    staging.r === target.row && staging.c === target.col;
+  return (
+    !stagingIsOrigin &&
+    !stagingIsTarget &&
+    isFrameSquare(staging.r, staging.c)
+  );
+}
+
+function knightStagingSquares(state, knight, target, delta = null) {
+  const dr = delta?.[0] ?? target.row - knight.row;
+  const dc =
+    delta?.[1] ??
+    (usesWraparound(state)
+      ? wrappedColDelta(knight.col, target.col)
+      : target.col - knight.col);
   if (
     !(
       (Math.abs(dr) === 2 && Math.abs(dc) === 1) ||
@@ -837,46 +1337,64 @@ function knightStagingSquares(state, knight, target) {
   }
   const candidates = [
     { r: target.row - Math.sign(dr), c: target.col },
-    { r: target.row, c: target.col - Math.sign(dc) },
+    squareFromDelta(state, { r: target.row, c: target.col }, 0, -Math.sign(dc)),
   ];
   return candidates.filter((square) => {
-    if (!isValidSquare(square.r, square.c)) return false;
+    if (!square || !isValidSquare(square.r, square.c)) return false;
     if (square.r === knight.row && square.c === knight.col) return false;
     const occupant = getPiece(state.board, square.r, square.c);
     return !occupant || occupant.type === PIECE_TYPES.DEATH;
   });
 }
 
-function knightPassThroughSquares(knight, target) {
-  const dr = target.row - knight.row;
-  const dc = target.col - knight.col;
+function knightPassThroughSquares(state, knight, delta) {
+  const dr = delta[0];
+  const dc = delta[1];
   const rowStep = Math.sign(dr);
   const colStep = Math.sign(dc);
   let path = [];
 
   if (Math.abs(dr) === 2 && Math.abs(dc) === 1) {
     path = [
-      { r: knight.row + rowStep, c: knight.col },
-      { r: knight.row + rowStep, c: knight.col + colStep },
+      squareFromDelta(state, { r: knight.row, c: knight.col }, rowStep, 0),
+      squareFromDelta(
+        state,
+        { r: knight.row, c: knight.col },
+        rowStep,
+        colStep,
+      ),
     ];
   } else if (Math.abs(dr) === 1 && Math.abs(dc) === 2) {
     path = [
-      { r: knight.row, c: knight.col + colStep },
-      { r: knight.row + rowStep, c: knight.col + colStep },
+      squareFromDelta(state, { r: knight.row, c: knight.col }, 0, colStep),
+      squareFromDelta(
+        state,
+        { r: knight.row, c: knight.col },
+        rowStep,
+        colStep,
+      ),
     ];
   }
 
-  return path.filter((square) => isValidSquare(square.r, square.c));
+  return path.filter((square) => square && isValidSquare(square.r, square.c));
+}
+
+function knightPathToStaging(state, knight, staging, delta) {
+  return knightPassThroughSquares(state, knight, delta).filter(
+    (square) => !(square.r === staging.r && square.c === staging.c),
+  );
 }
 
 function generateLifeDeathMoves(state, piece) {
   const actions = [];
   for (const [dr, dc] of BISHOP_DIRS) {
-    const to = { r: piece.row + dr, c: piece.col + dc };
-    if (!isValidSquare(to.r, to.c)) continue;
+    const to = squareFromDelta(state, { r: piece.row, c: piece.col }, dr, dc);
+    if (!to) continue;
     if (getPiece(state.board, to.r, to.c)) continue;
-    if (piece.type === PIECE_TYPES.LIFE && !isLightSquare(to.r, to.c)) continue;
-    if (piece.type === PIECE_TYPES.DEATH && !isDarkSquare(to.r, to.c)) continue;
+    if (piece.type === PIECE_TYPES.LIFE && !isLightSquareForState(state, to.r, to.c))
+      continue;
+    if (piece.type === PIECE_TYPES.DEATH && !isDarkSquareForState(state, to.r, to.c))
+      continue;
     actions.push(
       withActionId({
         kind: "move",
@@ -902,13 +1420,26 @@ function generateLifeDeathSpecialActions(state, piece) {
 }
 
 function generateLifeHealActions(state, piece) {
+  if (!shieldsEnabledForState(state)) return [];
   const actions = [];
   for (const [dr, dc] of BISHOP_DIRS) {
-    const target = getPiece(state.board, piece.row + dr, piece.col + dc);
-    if (!target || !isLightSquare(target.row, target.col)) continue;
+    const targetSquare = squareFromDelta(
+      state,
+      { r: piece.row, c: piece.col },
+      dr,
+      dc,
+      1,
+      { allowWrap: false },
+    );
+    const target = targetSquare
+      ? getPiece(state.board, targetSquare.r, targetSquare.c)
+      : null;
+    if (!target || !isLightSquareForState(state, target.row, target.col))
+      continue;
     if (
       !canHaveShield(target.type) ||
       target.hasShield ||
+      target.frameSuppressedShield ||
       target.isImmune ||
       target.isIntimidated
     )
@@ -927,6 +1458,8 @@ function generateLifeHealActions(state, piece) {
           r: target.row,
           c: target.col,
           hadShield: target.hasShield,
+          frameSuppressedShield:
+            usesFrame(state) && isFrameSquare(target.row, target.col),
         },
         from: { r: piece.row, c: piece.col },
         to: { r: target.row, c: target.col },
@@ -940,10 +1473,27 @@ function generateLifeHealActions(state, piece) {
 function generateDeathKillActions(state, piece) {
   const actions = [];
   for (const [dr, dc] of BISHOP_DIRS) {
-    const target = getPiece(state.board, piece.row + dr, piece.col + dc);
-    if (!target || target.isImmune || !isDarkSquare(target.row, target.col))
+    const targetSquare = squareFromDelta(
+      state,
+      { r: piece.row, c: piece.col },
+      dr,
+      dc,
+      1,
+      { allowWrap: false },
+    );
+    const target = targetSquare
+      ? getPiece(state.board, targetSquare.r, targetSquare.c)
+      : null;
+    if (
+      !target ||
+      target.isImmune ||
+      !isDarkSquareForState(state, target.row, target.col)
+    )
       continue;
-    if (target.type === PIECE_TYPES.KING || target.type === PIECE_TYPES.DEATH)
+    if (
+      (target.type === PIECE_TYPES.KING && usesCheckmate(state)) ||
+      target.type === PIECE_TYPES.DEATH
+    )
       continue;
     if (isProtectedFromDeath(target, state)) continue;
     actions.push(
@@ -972,7 +1522,15 @@ function generateDeathKillActions(state, piece) {
 
 function isProtectedFromDeath(target, state) {
   for (const [dr, dc] of ROOK_DIRS) {
-    const protector = getPiece(state.board, target.row + dr, target.col + dc);
+    const square = squareFromDelta(
+      state,
+      { r: target.row, c: target.col },
+      dr,
+      dc,
+      1,
+      { allowWrap: false },
+    );
+    const protector = square ? getPiece(state.board, square.r, square.c) : null;
     if (protector && ownerOf(protector) === ownerOf(target)) return true;
   }
   return false;
@@ -989,6 +1547,8 @@ export function applyAction(state, action, options = {}) {
   if (action.kind === "move") applyMoveAction(next, action);
   if (action.kind === "attack") applyAttackAction(next, action);
   if (action.kind === "special") applySpecialAction(next, action);
+  updateFoolMemory(next, action, actorColor);
+  maybeNormalizeFrameShields(next);
 
   if (recordHistoryEntry) {
     next.lastAction = { ...structuredClone(action), color: actorColor };
@@ -997,6 +1557,7 @@ export function applyAction(state, action, options = {}) {
 
   if (next.gameOver) {
     clearIntimidation(next);
+    maybeNormalizeFrameShields(next);
     return next;
   }
 
@@ -1005,11 +1566,27 @@ export function applyAction(state, action, options = {}) {
   checkForAnnihilation(next);
   checkForMaterialDraw(next);
   if (normalizeAfterAction) {
-    if (!next.gameOver) updateIntimidation(next);
+    if (!next.gameOver) {
+      updateIntimidation(next);
+      maybeNormalizeFrameShields(next);
+    }
     normalizeTurn(next);
   }
 
   return next;
+}
+
+function updateFoolMemory(state, action, actorColor) {
+  if (!action.consumes?.standard || action.consumes?.special) return;
+  if (!STANDARD_PIECES.has(action.pieceType)) return;
+  const profile =
+    action.pieceType === PIECE_TYPES.FOOL
+      ? action.copiedProfile
+      : { type: action.pieceType };
+  if (!profile || profile.type === PIECE_TYPES.FOOL) return;
+  if (!STANDARD_PIECES.has(profile.type)) return;
+  state.foolMemory ??= { [COLORS.WHITE]: null, [COLORS.BLACK]: null };
+  state.foolMemory[actorColor] = { type: profile.type };
 }
 
 function applyMoveAction(state, action) {
@@ -1029,6 +1606,7 @@ function applyMoveAction(state, action) {
   const jumpedPiece = action.jumpedPieceId
     ? findPieceById(state, action.jumpedPieceId)
     : null;
+  applyStaticShieldStrips(state, action, piece);
   const destroyed = applyPathEffects(
     state,
     piece,
@@ -1045,14 +1623,14 @@ function applyMoveAction(state, action) {
   }
 
   setPiece(state.board, action.to.r, action.to.c, piece);
-  maybePromote(piece, action.promotionType);
+  maybePromote(state, piece, action.promotionType);
 }
 
 function applyAttackAction(state, action) {
   const attacker = findPieceById(state, action.pieceId);
   const target = findPieceById(state, action.targetId);
   if (!attacker || !target || target.isImmune) return;
-  if (target.type === PIECE_TYPES.KING) return;
+  if (target.type === PIECE_TYPES.KING && usesCheckmate(state)) return;
 
   const attackerFrom = { r: attacker.row, c: attacker.col };
   const diesAfterAttack =
@@ -1074,7 +1652,25 @@ function applyAttackAction(state, action) {
   }
 
   setPiece(state.board, finalSquare.r, finalSquare.c, attacker);
-  maybePromote(attacker, action.promotionType);
+  if (action.recoil && attacker.type === PIECE_TYPES.PAWN) {
+    attacker.hasShield = false;
+  }
+  maybePromote(state, attacker, action.promotionType);
+}
+
+function applyStaticShieldStrips(state, action, movingPiece) {
+  for (const strip of action.shieldStrips ?? []) {
+    const target = findPieceById(state, strip.pieceId);
+    if (
+      !target ||
+      target.isImmune ||
+      !target.hasShield ||
+      ownerOf(target) === ownerOf(movingPiece)
+    ) {
+      continue;
+    }
+    target.hasShield = false;
+  }
 }
 
 function applySpecialAction(state, action) {
@@ -1084,13 +1680,19 @@ function applySpecialAction(state, action) {
 
   if (action.mode === "heal") {
     if (
+      shieldsEnabledForState(state) &&
       canHaveShield(target.type) &&
       !target.hasShield &&
+      !target.frameSuppressedShield &&
       !target.isImmune &&
       !target.isIntimidated &&
-      isLightSquare(target.row, target.col)
+      isLightSquareForState(state, target.row, target.col)
     ) {
-      target.hasShield = true;
+      if (usesFrame(state) && isFrameSquare(target.row, target.col)) {
+        target.frameSuppressedShield = true;
+      } else {
+        target.hasShield = true;
+      }
       target.isImmune = true;
       target.immunityGrantedBy = ownerOf(piece);
     }
@@ -1100,9 +1702,9 @@ function applySpecialAction(state, action) {
   if (
     action.mode === "kill" &&
     !target.isImmune &&
-    target.type !== PIECE_TYPES.KING &&
+    (target.type !== PIECE_TYPES.KING || !usesCheckmate(state)) &&
     target.type !== PIECE_TYPES.DEATH &&
-    isDarkSquare(target.row, target.col) &&
+    isDarkSquareForState(state, target.row, target.col) &&
     !isProtectedFromDeath(target, state)
   ) {
     removePiece(state, target, ownerOf(piece));
@@ -1114,6 +1716,7 @@ function applySpecialAction(state, action) {
 
 function applyPathEffects(state, movingPiece, path) {
   for (const square of path) {
+    syncFrameShieldForSquare(state, movingPiece, square);
     const staticPiece = getPiece(state.board, square.r, square.c);
     if (
       !staticPiece ||
@@ -1122,7 +1725,11 @@ function applyPathEffects(state, movingPiece, path) {
     )
       continue;
     if (staticPiece.type === PIECE_TYPES.LIFE) {
-      if (canHaveShield(movingPiece.type) && !movingPiece.isIntimidated)
+      if (
+        shieldsEnabledForState(state) &&
+        canHaveShield(movingPiece.type) &&
+        !movingPiece.isIntimidated
+      )
         movingPiece.hasShield = true;
     }
     if (staticPiece.type === PIECE_TYPES.DEATH) {
@@ -1132,11 +1739,12 @@ function applyPathEffects(state, movingPiece, path) {
         return true;
       }
     }
+    syncFrameShieldForSquare(state, movingPiece, square);
   }
   return false;
 }
 
-function maybePromote(piece, promotionType) {
+function maybePromote(state, piece, promotionType) {
   if (!isPromotionRank(piece)) return;
   const promotedType = PROMOTION_TYPES.includes(promotionType)
     ? promotionType
@@ -1144,7 +1752,9 @@ function maybePromote(piece, promotionType) {
   const inheritedShield = piece.hasShield;
   piece.type = promotedType;
   piece.hasShield =
-    promotedType === PIECE_TYPES.QUEEN ? false : inheritedShield;
+    promotedType === PIECE_TYPES.QUEEN || !shieldsEnabledForState(state)
+      ? false
+      : inheritedShield;
 }
 
 function applyTurnConsumption(state, action) {
@@ -1185,9 +1795,11 @@ export function normalizeTurn(state) {
   if (state.gameOver) return state;
   checkForMaterialDraw(state);
   if (state.gameOver) return state;
-  if (applyCheckmateResult(state, state.currentPlayer)) return state;
-  if (applyCheckmateResult(state, oppositeColor(state.currentPlayer)))
-    return state;
+  if (usesCheckmate(state)) {
+    if (applyCheckmateResult(state, state.currentPlayer)) return state;
+    if (applyCheckmateResult(state, oppositeColor(state.currentPlayer)))
+      return state;
+  }
   let skipped = 0;
   while (!state.gameOver && generateLegalActions(state).length === 0) {
     skipped += 1;
@@ -1199,13 +1811,16 @@ export function normalizeTurn(state) {
       break;
     }
     switchTurn(state);
-    if (applyCheckmateResult(state, state.currentPlayer)) break;
-    if (applyCheckmateResult(state, oppositeColor(state.currentPlayer))) break;
+    if (usesCheckmate(state)) {
+      if (applyCheckmateResult(state, state.currentPlayer)) break;
+      if (applyCheckmateResult(state, oppositeColor(state.currentPlayer))) break;
+    }
   }
   return state;
 }
 
 function applyCheckmateResult(state, loser) {
+  if (!usesCheckmate(state)) return false;
   if (!isCheckmate(state, loser)) return false;
   state.gameOver = {
     winner: oppositeColor(loser),
@@ -1249,8 +1864,7 @@ function checkForAnnihilation(state) {
       const a = lifeDeath[i];
       const b = lifeDeath[j];
       if (a.type === b.type) continue;
-      const adjacentOrthogonal =
-        Math.abs(a.row - b.row) + Math.abs(a.col - b.col) === 1;
+      const adjacentOrthogonal = arePhysicallyOrthogonal(a, b);
       if (adjacentOrthogonal) {
         doomed.add(a.id);
         doomed.add(b.id);
@@ -1261,6 +1875,10 @@ function checkForAnnihilation(state) {
     const piece = findPieceById(state, id);
     if (piece) removePiece(state, piece);
   }
+}
+
+function arePhysicallyOrthogonal(a, b) {
+  return Math.abs(a.row - b.row) + Math.abs(a.col - b.col) === 1;
 }
 
 function checkForMaterialDraw(state) {
@@ -1281,6 +1899,12 @@ function checkForMaterialDraw(state) {
 }
 
 export function updateIntimidation(state) {
+  if (!usesCheckmate(state)) {
+    clearIntimidation(state);
+    maybeNormalizeFrameShields(state);
+    return;
+  }
+
   const pieces = allPieces(state);
 
   for (const piece of pieces) {
@@ -1289,7 +1913,11 @@ export function updateIntimidation(state) {
     const stillChecking = enemyKing && attacksKing(state, piece, enemyKing);
     if (!stillChecking) {
       piece.isIntimidated = false;
-      if (piece.intimidationSuppressedShield && canHaveShield(piece.type))
+      if (
+        piece.intimidationSuppressedShield &&
+        shieldsEnabledForState(state) &&
+        canHaveShield(piece.type)
+      )
         piece.hasShield = true;
       piece.intimidationSuppressedShield = false;
     }
@@ -1308,9 +1936,15 @@ export function updateIntimidation(state) {
       }
     }
   }
+  maybeNormalizeFrameShields(state);
+}
+
+function maybeNormalizeFrameShields(state) {
+  if (usesFrame(state)) normalizeFrameShields(state);
 }
 
 export function isKingInCheck(state, color) {
+  if (!usesCheckmate(state)) return false;
   const king = findKing(state, color);
   if (!king) return false;
   return allPieces(state).some(
@@ -1319,6 +1953,7 @@ export function isKingInCheck(state, color) {
 }
 
 export function isCheckmate(state, color = state.currentPlayer) {
+  if (!usesCheckmate(state)) return false;
   if (!isKingInCheck(state, color)) return false;
   return !hasLegalCheckEvasionSequence(checkmateProbeState(state, color), color);
 }
@@ -1393,7 +2028,11 @@ function clearIntimidation(state) {
   for (const piece of allPieces(state)) {
     if (!piece.isIntimidated) continue;
     piece.isIntimidated = false;
-    if (piece.intimidationSuppressedShield && canHaveShield(piece.type))
+    if (
+      piece.intimidationSuppressedShield &&
+      shieldsEnabledForState(state) &&
+      canHaveShield(piece.type)
+    )
       piece.hasShield = true;
     piece.intimidationSuppressedShield = false;
   }
@@ -1429,19 +2068,42 @@ function pawnDirection(piece) {
   return piece.color === COLORS.WHITE ? -1 : 1;
 }
 
-function linePath(from, to) {
-  const dr = Math.sign(to.r - from.r);
-  const dc = Math.sign(to.c - from.c);
+function squareFromDelta(state, from, dr, dc, multiplier = 1, options = {}) {
+  const row = from.r + dr * multiplier;
+  const rawCol = from.c + dc * multiplier;
+  if (row < 0 || row >= BOARD_SIZE) return null;
+  if (options.allowWrap !== false && usesWraparound(state)) {
+    return { r: row, c: mod(rawCol, BOARD_SIZE) };
+  }
+  if (rawCol < 0 || rawCol >= BOARD_SIZE) return null;
+  return { r: row, c: rawCol };
+}
+
+function physicalSquareFromDelta(from, dr, dc, multiplier = 1) {
+  const row = from.r + dr * multiplier;
+  const col = from.c + dc * multiplier;
+  if (!isValidSquare(row, col)) return null;
+  return { r: row, c: col };
+}
+
+function rayPath(state, from, dr, dc, exclusiveDistance, options = {}) {
   const path = [];
-  let r = from.r + dr;
-  let c = from.c + dc;
-  while (r !== to.r || c !== to.c) {
-    if (!isValidSquare(r, c)) return [];
-    path.push({ r, c });
-    r += dr;
-    c += dc;
+  for (let distance = 1; distance < exclusiveDistance; distance++) {
+    const square = squareFromDelta(state, from, dr, dc, distance, options);
+    if (!square) return [];
+    path.push(square);
   }
   return path;
+}
+
+function wrappedColDelta(fromCol, toCol) {
+  const direct = toCol - fromCol;
+  if (Math.abs(direct) <= BOARD_SIZE / 2) return direct;
+  return direct > 0 ? direct - BOARD_SIZE : direct + BOARD_SIZE;
+}
+
+function mod(value, base) {
+  return ((value % base) + base) % base;
 }
 
 function dedupeActions(actions) {
@@ -1454,10 +2116,83 @@ function dedupeActions(actions) {
   });
 }
 
+function preferEquivalentMoveRoutes(state, actions) {
+  const bestByDestination = new Map();
+  for (const action of actions) {
+    if (!action.to || action.kind !== "move") continue;
+    const key = [
+      action.kind,
+      action.mode,
+      action.pieceId,
+      squareKey(action.from),
+      squareKey(action.to),
+      action.promotionType ?? "",
+    ].join("|");
+    const current = bestByDestination.get(key);
+    if (
+      !current ||
+      compareRoutePreference(state, action, current) > 0
+    ) {
+      bestByDestination.set(key, action);
+    }
+  }
+  return actions.filter((action) => {
+    if (!action.to || action.kind !== "move") return true;
+    const key = [
+      action.kind,
+      action.mode,
+      action.pieceId,
+      squareKey(action.from),
+      squareKey(action.to),
+      action.promotionType ?? "",
+    ].join("|");
+    return bestByDestination.get(key) === action;
+  });
+}
+
+function compareRoutePreference(state, a, b) {
+  const routeA = routePreference(state, a);
+  const routeB = routePreference(state, b);
+  return (
+    routeA.lifeOnlyBonus - routeB.lifeOnlyBonus ||
+    routeA.deathPenalty - routeB.deathPenalty ||
+    routeA.lifeCount - routeB.lifeCount ||
+    routeB.pathLength - routeA.pathLength ||
+    a.id.localeCompare(b.id) * -1
+  );
+}
+
+function routePreference(state, action) {
+  let lifeCount = 0;
+  let deathCount = 0;
+  for (const square of action.path ?? []) {
+    const occupant = getPiece(state.board, square.r, square.c);
+    if (occupant?.type === PIECE_TYPES.LIFE) lifeCount += 1;
+    if (occupant?.type === PIECE_TYPES.DEATH) deathCount += 1;
+  }
+  return {
+    lifeOnlyBonus: lifeCount > 0 && deathCount === 0 ? 1 : 0,
+    deathPenalty: -deathCount,
+    lifeCount,
+    pathLength: action.path?.length ?? 0,
+  };
+}
+
 function rampSequenceKey(sequence = []) {
   return sequence
     .map((step) => `${squareKey(step.ramp)}>${squareKey(step.land)}`)
     .join(";");
+}
+
+function shieldStripKey(strips = []) {
+  return strips
+    .map((strip) => `${strip.pieceId}@${squareKey(strip.square)}`)
+    .sort()
+    .join(";");
+}
+
+function pathKey(path = []) {
+  return path.map(squareKey).join(">");
 }
 
 export function sortActions(actions) {

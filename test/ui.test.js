@@ -4,6 +4,8 @@ import {
   COLORS,
   FILES,
   PIECE_TYPES,
+  VARIANT_IDS,
+  applyShieldOverrideToBoard,
   applyAction,
   createEmptyState,
   createGameState,
@@ -67,10 +69,22 @@ class FakeElement {
   }
 
   appendChild(child) {
+    if (child.parent) {
+      child.parent.children = child.parent.children.filter(
+        (existing) => existing !== child,
+      );
+    }
+    this.children = this.children.filter((existing) => existing !== child);
     child.parent = this;
     this.children.push(child);
     this.scrollHeight = this.children.length * 20;
     return child;
+  }
+
+  replaceChildren(...children) {
+    for (const child of this.children) child.parent = null;
+    this.children = [];
+    for (const child of children) this.appendChild(child);
   }
 
   contains(candidate) {
@@ -93,6 +107,8 @@ class FakeElement {
     if (selector.startsWith("#")) return findById(this, selector.slice(1));
     if (selector.startsWith('[data-control="'))
       return findByDataset(this, "control", selector.slice(15, -2));
+    if (selector.startsWith('[data-dev-action="'))
+      return findByDataset(this, "devAction", selector.slice(18, -2));
     if (selector.startsWith('[data-side="'))
       return findByDataset(this, "side", selector.slice(12, -2));
     if (selector.startsWith("[data-piece-id]"))
@@ -169,6 +185,16 @@ function collectMatches(root, selector, matches) {
   for (const child of root.children) collectMatches(child, selector, matches);
 }
 
+function translateNumbers(transform) {
+  const match = String(transform).match(
+    /translate\((-?\d+(?:\.\d+)?)px, (-?\d+(?:\.\d+)?)px\)/,
+  );
+  return {
+    x: Number(match?.[1] ?? 0),
+    y: Number(match?.[2] ?? 0),
+  };
+}
+
 function makeStatusPanel() {
   const panel = new FakeElement("div");
   for (const id of [
@@ -237,6 +263,54 @@ function makeSettingsPanel() {
   const newGame = new FakeElement("button");
   newGame.dataset.control = "new-game";
   panel.appendChild(newGame);
+  return panel;
+}
+
+function makeDeveloperPanel() {
+  const stack = new FakeElement("div");
+  stack.setAttribute("id", "developer-panel-stack");
+  const panel = new FakeElement("aside");
+  panel.setAttribute("id", "developer-panel");
+  stack.appendChild(panel);
+  const collapse = new FakeElement("button");
+  collapse.setAttribute("id", "dev-collapse-button");
+  panel.appendChild(collapse);
+  for (const id of [
+    "variant-select",
+    "shields-disabled",
+    "check-pattern-select",
+    "pawn-behavior-select",
+    "pawn-initial-max-step-select",
+    "knight-movement-select",
+    "frame-enabled",
+    "wraparound-enabled",
+    "checkmate-disabled",
+    "dev-current-player",
+    "dev-move-number",
+    "dev-standard-used",
+    "dev-special-used",
+    "fen-field",
+    "board-edit-enabled",
+    "edit-piece-type",
+    "edit-piece-color",
+    "edit-piece-shield",
+    "edit-piece-immune",
+    "edit-piece-moved",
+  ]) {
+    const tagName = id === "fen-field" ? "textarea" : "input";
+    const child = new FakeElement(tagName);
+    child.setAttribute("id", id);
+    panel.appendChild(child);
+  }
+  const message = new FakeElement("p");
+  message.setAttribute("id", "dev-message");
+  stack.appendChild(message);
+  const toast = new FakeElement("div");
+  toast.setAttribute("id", "dev-toast");
+  panel.appendChild(toast);
+  const undoEdit = new FakeElement("button");
+  undoEdit.dataset.devAction = "undo-board-edit";
+  panel.appendChild(undoEdit);
   return panel;
 }
 
@@ -352,18 +426,356 @@ test("renderer places captured pieces above and below the right panel by board s
   globalThis.document = previousDocument;
 });
 
-test("portrait captured trays anchor beside the panel and grow vertically", () => {
-  const css = readFileSync(new URL("../style.css", import.meta.url), "utf8");
+test("renderer resolves Toad-Fool piece assets and inverted board colors", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
 
+  const board = new FakeElement("div");
+  const renderer = new Renderer({
+    boardEl: board,
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+  renderer.render(createGameState({ variantId: "toad-fool" }), {});
+
+  expect(board.children[0].className).toContain("light");
+  expect(board.children[13].children[0].children[0].src).toBe(
+    "assets/pieces/bT.webp",
+  );
+  expect(board.children[16].children[0].children[0].src).toBe(
+    "assets/pieces/bF.webp",
+  );
+  expect(board.children[83].children[0].children[0].src).toBe(
+    "assets/pieces/wT.webp",
+  );
+  expect(board.children[86].children[0].children[0].src).toBe(
+    "assets/pieces/wF.webp",
+  );
+
+  globalThis.document = previousDocument;
+});
+
+test("renderer overlays the copied profile on Fool pieces", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const state = createEmptyState(COLORS.WHITE, { variantId: "toad-fool" });
+  state.foolMemory[COLORS.BLACK] = { type: PIECE_TYPES.KNIGHT };
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.WHITE, 5, 5, { id: "white-fool" }),
+  );
+  const board = new FakeElement("div");
+  const renderer = new Renderer({
+    boardEl: board,
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+  renderer.render(state, {});
+
+  const fool = board.children[55].children[0];
+  const overlay = fool.children[2];
+  expect(overlay.className).toContain("fool-profile-overlay white");
+  expect(overlay.dataset.profileType).toBe(PIECE_TYPES.KNIGHT);
+  expect(overlay.children[0].src).toBe("assets/pieces/wN.webp");
+  expect(fool.title).toContain("imitating Knight");
+
+  globalThis.document = previousDocument;
+});
+
+test("portrait captured trays anchor beside the panel and grow vertically", () => {
+  const css = readFileSync(
+    new URL("../style.css", import.meta.url),
+    "utf8",
+  ).replace(/\r\n/g, "\n");
+
+  expect(css).toContain(
+    "grid-template-columns: minmax(0, 1fr) var(--board-outer-size) minmax(0, 1fr);",
+  );
+  expect(css).toContain("  width: min(var(--side-panel-width), 100%);");
+  expect(css).toContain("  min-width: 0;");
+  expect(css).toContain("@media screen and (max-width: 1024px) {");
+  expect(css).toContain(
+    "  #developer-panel-stack {\n    display: block;\n  }",
+  );
   expect(css).toContain(
     "@media screen and (max-width: 1024px) and (orientation: portrait)",
   );
+  expect(css).toContain(
+    "@media screen and (max-width: 1024px) and (orientation: landscape)",
+  );
+  expect(css).toContain("--mobile-landscape-side-width");
+  expect(css).toContain(
+    "--dev-panel-width: var(--mobile-landscape-side-width);",
+  );
+  expect(css).toContain("    justify-content: center;");
+  expect(css).toContain(
+    "@media screen and (min-width: 1025px) and (max-width: 1180px)",
+  );
+  expect(css).toContain("--dev-panel-min-width: 224px;");
+  expect(css).toContain("  flex-wrap: wrap;");
   expect(css).toContain("  #captured-top,\n  #captured-bottom {\n    top: 0;");
   expect(css).toContain("    bottom: auto;\n  }");
   expect(css).toContain("    height: auto;");
   expect(css).toContain("    grid-auto-rows: auto;");
   expect(css).toContain("    width: 100%;\n    gap: 0;");
   expect(css).toContain("    align-items: center;");
+});
+
+test("status message keeps a fixed slot and compacts when it overflows", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+  const css = readFileSync(
+    new URL("../style.css", import.meta.url),
+    "utf8",
+  ).replace(/\r\n/g, "\n");
+  const status = makeStatusPanel();
+  const info = status.querySelector("#phase-info");
+  info.clientHeight = 36;
+  info.scrollHeight = 72;
+  const renderer = new Renderer({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: status,
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+
+  renderer.render(createGameState(), {
+    phaseInfo:
+      "Fool selected: imitating Knight, but has no legal action in the remaining turn slots.",
+  });
+
+  expect(css).toContain("  flex: 0 0 var(--info-box-height);");
+  expect(css).toContain("  max-height: var(--info-box-height);");
+  expect(css).toContain("#phase-info.is-tight {");
+  expect(css).toContain("#phase-info.is-tiny {");
+  expect(info.className).toContain("is-tight");
+  expect(info.className).toContain("is-tiny");
+  expect(info.title).toBe(info.textContent);
+
+  globalThis.document = previousDocument;
+});
+
+test("static Developer Panel markup exposes variant and rule toggles", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../style.css", import.meta.url), "utf8");
+  const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+  const renderer = readFileSync(
+    new URL("../src/ui/renderer.js", import.meta.url),
+    "utf8",
+  );
+  const pagesWorkflow = readFileSync(
+    new URL("../.github/workflows/pages.yml", import.meta.url),
+    "utf8",
+  );
+  const packageJson = readFileSync(
+    new URL("../package.json", import.meta.url),
+    "utf8",
+  );
+  const boardEditIndex = html.indexOf(
+    'class="dev-section dev-board-edit-section"',
+  );
+  const checkPatternIndex = html.indexOf('id="check-pattern-select"');
+  const pieceIndex = html.indexOf('id="edit-piece-type"');
+  const fenIndex = html.indexOf('id="fen-field"');
+  const undoEditIndex = html.indexOf('data-dev-action="undo-board-edit"');
+  const clearIndex = html.indexOf('data-dev-action="clear-board"');
+  const standardIndex = html.indexOf('for="dev-standard-used"');
+  const specialIndex = html.indexOf('for="dev-special-used"');
+  const panelCloseIndex = html.indexOf("</aside>");
+  const messageIndex = html.indexOf('id="dev-message"');
+
+  expect(html).toContain('id="developer-panel-stack"');
+  expect(html).toContain('<body class="app-booting">');
+  expect(html).toContain('<script type="module" src="./src/main.js"></script>');
+  expect(html).not.toContain('src="/src/main.js"');
+  expect(html).not.toContain("chess-two.bundle.js");
+  expect(renderer).toContain("rawGithubPagesSourceAssetBase");
+  expect(renderer).toContain("public/assets/pieces/");
+  expect(renderer).toContain("import.meta.env?.BASE_URL");
+  expect(pagesWorkflow).toContain("oven-sh/setup-bun@v2");
+  expect(pagesWorkflow).toContain("bun install --frozen-lockfile");
+  expect(pagesWorkflow).toContain("bun run build");
+  expect(`${packageJson}\n${pagesWorkflow}`).not.toMatch(
+    /\bnpm\b|\bnpx\b|\byarn\b|\bpnpm\b/,
+  );
+  expect(html).toContain('<option value="frame-chess">Frame Chess</option>');
+  expect(html).toContain(
+    '<option value="frame-chess-without-ld">Frame Chess w/o LD</option>',
+  );
+  expect(html).toContain('<option value="chess-two">Chess Two</option>');
+  expect(html).toContain('<option value="chessTwo">Orthodox</option>');
+  expect(html).toContain('<option value="frontalFan">Frontal Fan</option>');
+  expect(html).toContain('<option value="frontalFan2">Frontal Fan 2</option>');
+  expect(html).not.toContain('<option value="forwardFan">Forward Fan</option>');
+  expect(html).toContain('id="pawn-initial-max-step-select"');
+  expect(html).toContain('id="shields-disabled"');
+  expect(html).toContain('id="frame-enabled"');
+  expect(html).toContain('id="wraparound-enabled"');
+  expect(html).toContain('id="checkmate-disabled"');
+  expect(html).not.toContain('wrap="off"');
+  expect(html).toContain('class="dev-check-row"');
+  expect(html).toContain('class="dev-section dev-board-edit-section"');
+  expect(html).toContain('id="dev-toast"');
+  expect(html).toContain('data-dev-action="undo-board-edit"');
+  expect(html).toContain("Undo Last Edit");
+  expect(html).not.toContain("Date.now()");
+  expect(checkPatternIndex).toBeGreaterThan(boardEditIndex);
+  expect(undoEditIndex).toBeGreaterThan(boardEditIndex);
+  expect(undoEditIndex).toBeLessThan(checkPatternIndex);
+  expect(pieceIndex).toBeGreaterThan(checkPatternIndex);
+  expect(fenIndex).toBeGreaterThan(boardEditIndex);
+  expect(clearIndex).toBeGreaterThan(fenIndex);
+  expect(specialIndex).toBeGreaterThan(standardIndex);
+  expect(messageIndex).toBeGreaterThan(panelCloseIndex);
+  expect(css).toContain("#developer-panel-stack");
+  expect(css).toContain("body.app-booting #game-container");
+  expect(css).toContain(".dev-section");
+  expect(css).toContain(".dev-check-row");
+  expect(css).toContain(".dev-board-edit-heading");
+  expect(css).toContain("#dev-message");
+  expect(css).toContain("#developer-panel.has-hidden-dev-content-below::after");
+  expect(css).toContain("--dev-panel-fade-height");
+  expect(css).toContain("--checkbox-size");
+  expect(css).toContain('#developer-panel input[type="checkbox"]');
+  expect(css).toContain(".square.frame-square::before");
+  expect(css).toContain(".square.wrap-file::after");
+  expect(css).toContain(".piece.frame-shield-suppressed");
+  expect(css).toContain(".piece.frame-affected");
+  expect(css).toContain("white-space: pre-wrap;");
+  expect(css).toContain("overflow-wrap: anywhere;");
+  expect(css).toContain("overflow-y: hidden;");
+  expect(css).toContain("resize: none;");
+  expect(css).toContain("field-sizing: content;");
+  expect(css).toContain("overflow-anchor: none;");
+  expect(css).toContain("text-overflow: ellipsis;");
+  const textareaRule = css.slice(
+    css.indexOf("#developer-panel textarea {"),
+    css.indexOf("#developer-panel button {"),
+  );
+  expect(textareaRule).not.toContain("scrollbar-gutter");
+  expect(css).toContain(".dev-toast");
+  expect(css).toContain("transform: translateY(-50%);");
+  expect(main).toContain("revealBootedApp");
+  expect(main).toContain("waitForInitialAssets");
+  expect(main).toContain('classList.remove("app-booting")');
+});
+
+test("renderer auto-sizes the FEN field between content height and max height", () => {
+  const previousComputedStyle = globalThis.getComputedStyle;
+  const previousDocument = globalThis.document;
+  globalThis.getComputedStyle = () => ({
+    lineHeight: "17px",
+    paddingTop: "7px",
+    paddingBottom: "7px",
+    borderTopWidth: "1px",
+    borderBottomWidth: "1px",
+  });
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const devPanel = makeDeveloperPanel();
+  devPanel.scrollTop = 37;
+  const fenField = findById(devPanel, "fen-field");
+  fenField.scrollHeight = 84;
+  const renderer = new Renderer({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: devPanel,
+  });
+
+  renderer.renderDeveloperPanel(createGameState(), {
+    developer: { fenText: "91/91/91/91/91/91/91/91/91/91 w - - 0 1" },
+  });
+  expect(fenField.style.height).toBe("84px");
+  expect(fenField.style.overflowY).toBe("hidden");
+  expect(fenField.style.maxHeight).toBe("152px");
+  expect(devPanel.scrollTop).toBe(37);
+
+  fenField.scrollHeight = 300;
+  renderer.resizeDeveloperFenField();
+  expect(fenField.style.height).toBe("152px");
+  expect(fenField.style.overflowY).toBe("auto");
+
+  if (previousComputedStyle) {
+    globalThis.getComputedStyle = previousComputedStyle;
+  } else {
+    delete globalThis.getComputedStyle;
+  }
+  globalThis.document = previousDocument;
+});
+
+test("variant docs describe current Classic and Frame Chess defaults", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const toadRules = readFileSync(
+    new URL("../TOAD_FOOL_RULES.md", import.meta.url),
+    "utf8",
+  );
+  const frameRules = readFileSync(
+    new URL("../FRAME_CHESS_RULES.md", import.meta.url),
+    "utf8",
+  );
+  const chessTwoFen =
+    "drnbqkbnrl/pppppppppp/91/91/91/91/91/91/PPPPPPPPPP/LRNBQKBNRD w - - 0 1";
+  const toadFoolFen =
+    "l8d/1rbtqkfnr1/pppppppppp/91/91/91/91/PPPPPPPPPP/1RNTQKFBR1/D8L w - - 0 1";
+  const classicFen =
+    "drbtqkfnrl/pppppppppp/91/91/91/91/91/91/PPPPPPPPPP/LRNTQKFBRD w - - 0 1";
+  const frameFen =
+    "d3qk3l/2rbtfnr2/1pppppppp1/91/91/91/91/1PPPPPPPP1/2RNTFBR2/L3QK3D w - - 0 1";
+  const frameWithoutLdFen =
+    "91/1rbtqkfnr1/1pppppppp1/91/91/91/91/1PPPPPPPP1/1RNTQKFBR1/91 w - - 0 1";
+
+  expect(readme).toContain(chessTwoFen);
+  expect(readme).toContain(toadFoolFen);
+  expect(readme).toContain(classicFen);
+  expect(readme).toContain(frameFen);
+  expect(readme).toContain(frameWithoutLdFen);
+  expect(readme).toContain("Frame Chess");
+  expect(readme).toContain("Frame Chess w/o LD");
+  expect(html).toContain("orthodox L-moves");
+  expect(html).toContain("bend-square");
+  expect(toadRules).toContain(toadFoolFen);
+  expect(toadRules).toContain(classicFen);
+  expect(readme).toContain("pawn initial max step: `3`");
+  expect(readme).toContain("pawn initial max step: `2`");
+  expect(readme).toContain("shields enabled: `true`");
+  expect(readme).toContain("frame enabled: `true`");
+  expect(readme).toContain("wrap-around enabled: `true`");
+  expect(readme).toContain(
+    "do not use the Chess Two direct Life/Death pawn jump",
+  );
+  expect(toadRules).toContain("Pawn initial max step defaults to `2`");
+  expect(toadRules).toContain(
+    "Frontal Fan pawns do not use Chess Two's direct Life/Death pawn jump",
+  );
+  expect(toadRules).toContain("`frontalFan2`");
+  expect(toadRules).toContain("Shields are enabled by default");
+  expect(frameRules).toContain(
+    "Non-King standard pieces cannot attack from a frame square",
+  );
+  expect(frameRules).toContain("check pattern: `standard`");
+  expect(frameRules).toContain("columns wrap horizontally");
 });
 
 test("renderer exposes promotion choices when promotion actions are pending", () => {
@@ -434,6 +846,21 @@ test("renderer shows the full action history with player markers", () => {
       staging: { r: 4, c: 3 },
       deathStaging: true,
     },
+    {
+      kind: "move",
+      mode: "toadRamp",
+      pieceType: "Toad",
+      color: "white",
+      from: { r: 5, c: 5 },
+      to: { r: 5, c: 7 },
+      shieldStrips: [
+        { pieceId: "enemy-ramp", square: { r: 4, c: 6 }, pathIndex: 1 },
+      ],
+      rampSequence: [
+        { ramp: { r: 4, c: 5 }, land: { r: 3, c: 5 } },
+        { ramp: { r: 4, c: 6 }, land: { r: 5, c: 7 } },
+      ],
+    },
   ];
 
   const status = makeStatusPanel();
@@ -448,7 +875,7 @@ test("renderer shows the full action history with player markers", () => {
   renderer.render(state, {});
 
   const history = status.querySelector("#action-history ol");
-  expect(history.children).toHaveLength(4);
+  expect(history.children).toHaveLength(5);
   expect(history.children[0].dataset.actionColor).toBe("white");
   expect(history.children[0].textContent).toContain("Pawn a2-a3");
   expect(history.children[1].dataset.actionColor).toBe("black");
@@ -459,7 +886,55 @@ test("renderer shows the full action history with player markers", () => {
     "Pawn breaks shield on white Pawn e5, attacker dies on Death",
   );
   expect(history.children[3].textContent).not.toContain("rests");
+  expect(history.children[4].textContent).toContain(
+    "Toad f5-h5 via f7, strips 1 shield",
+  );
   expect(history.scrollTop).toBe(history.scrollHeight);
+
+  globalThis.document = previousDocument;
+});
+
+test("renderer labels Life heals on frame squares as latent shields", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  let state = createEmptyState(COLORS.BLACK, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.BLACK, 1, 2, { id: "life" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 3, {
+      id: "frame-pawn",
+      hasShield: false,
+    }),
+  );
+  const heal = generateLegalActions(state).find(
+    (action) => action.mode === "heal" && action.targetId === "frame-pawn",
+  );
+  expect(heal).toBeTruthy();
+  state = applyAction(state, heal);
+
+  const status = makeStatusPanel();
+  const renderer = new Renderer({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: status,
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+  renderer.render(state, {});
+
+  const history = status.querySelector("#action-history ol");
+  expect(history.children[0].textContent).toBe(
+    "Life stores frame shield for black Pawn d10",
+  );
 
   globalThis.document = previousDocument;
 });
@@ -563,6 +1038,40 @@ test("renderer shows action history fade only when newer actions are hidden belo
   history.scrollTop = history.scrollHeight;
   history.dispatchEvent({ type: "scroll" });
   expect(container.className).not.toContain("has-hidden-actions-below");
+
+  globalThis.document = previousDocument;
+});
+
+test("renderer shows developer panel fade only while content is hidden below", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const devPanel = makeDeveloperPanel();
+  devPanel.clientHeight = 100;
+  devPanel.scrollHeight = 260;
+  const renderer = new Renderer({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: devPanel,
+  });
+
+  renderer.render(createGameState(), {});
+  expect(devPanel.className).toContain("has-hidden-dev-content-below");
+
+  devPanel.scrollTop = 260;
+  devPanel.dispatchEvent({ type: "scroll" });
+  expect(devPanel.className).not.toContain("has-hidden-dev-content-below");
+
+  devPanel.scrollTop = 0;
+  renderer.render(createGameState(), { developer: { collapsed: true } });
+  expect(devPanel.className).toContain("is-collapsed");
+  expect(devPanel.className).not.toContain("has-hidden-dev-content-below");
 
   globalThis.document = previousDocument;
 });
@@ -760,6 +1269,113 @@ test("renderer preserves identical board DOM on status-only renders", () => {
 
   expect(board.children[0]).toBe(firstSquare);
   expect(board.children[0].children[0]).toBe(firstPiece);
+
+  globalThis.document = previousDocument;
+});
+
+test("renderer keeps piece image DOM stable across highlights and moves", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const board = new FakeElement("div");
+  const renderer = new Renderer({
+    boardEl: board,
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+  const state = createEmptyState(COLORS.WHITE);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 5, 5, { id: "white-rook" }),
+  );
+
+  renderer.render(state, {});
+  const rookEl = board.children[55].children[0];
+  const rookImage = rookEl.children[0];
+  const highlights = emptyHighlights();
+  highlights.moves.add("4,5");
+  renderer.render(state, { highlights });
+  expect(board.children[55].children[0]).toBe(rookEl);
+  expect(board.children[55].children[0].children[0]).toBe(rookImage);
+  expect(board.children[45].children[0].className).toContain("valid-move");
+
+  const movedState = createEmptyState(COLORS.WHITE);
+  placePiece(
+    movedState.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 5, 6, { id: "white-rook" }),
+  );
+  renderer.render(movedState, {});
+  expect(board.children[55].children).toHaveLength(0);
+  expect(board.children[56].children[0]).toBe(rookEl);
+  expect(board.children[56].children[0].children[0]).toBe(rookImage);
+
+  globalThis.document = previousDocument;
+});
+
+test("renderer updates piece status in place to avoid move flicker", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const board = new FakeElement("div");
+  const renderer = new Renderer({
+    boardEl: board,
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+  const state = createEmptyState(COLORS.WHITE);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, {
+      id: "white-knight",
+      hasShield: false,
+    }),
+  );
+
+  renderer.render(state, {});
+  const knightEl = board.children[55].children[0];
+  const knightImage = knightEl.children[0];
+  const statusOverlay = knightEl.children[2];
+
+  const shieldedState = createEmptyState(COLORS.WHITE);
+  placePiece(
+    shieldedState.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 4, 6, {
+      id: "white-knight",
+      hasShield: true,
+    }),
+  );
+  renderer.render(shieldedState, {});
+  expect(board.children[55].children).toHaveLength(0);
+  expect(board.children[46].children[0]).toBe(knightEl);
+  expect(board.children[46].children[0].children[0]).toBe(knightImage);
+  expect(board.children[46].children[0].children[2]).toBe(statusOverlay);
+  expect(board.children[46].children[0].className).toContain("has-shield");
+
+  const promotedState = createEmptyState(COLORS.WHITE);
+  placePiece(
+    promotedState.board,
+    createPiece(PIECE_TYPES.QUEEN, COLORS.WHITE, 4, 6, {
+      id: "white-knight",
+      hasShield: true,
+    }),
+  );
+  renderer.render(promotedState, {});
+  expect(board.children[46].children[0]).toBe(knightEl);
+  expect(board.children[46].children[0].children[0]).toBe(knightImage);
+  expect(knightImage.dataset.assetPath).toContain("wQ.webp");
+  expect(board.children[46].children[0].attributes["aria-label"]).toBe(
+    "white Queen",
+  );
 
   globalThis.document = previousDocument;
 });
@@ -1483,13 +2099,13 @@ test("board animator plays double Knight ramp as two chained hop animations with
   expect(animations[0].keyframes.map((frame) => frame.offset)).toEqual([0, 1]);
   expect(animations[1].keyframes.map((frame) => frame.offset)).toEqual([0, 1]);
   expect(animations[0].keyframes[0].transform).toContain(
-    "translate(-40px, 0px) scale(1.05)",
+    "translate(-40px, 0px) scale(1)",
   );
   expect(animations[0].keyframes.at(-1).transform).toContain(
-    "translate(-20px, -20px) scale(1.05)",
+    "translate(-20px, -20px) scale(1)",
   );
   expect(animations[1].keyframes[0].transform).toContain(
-    "translate(-20px, -20px) scale(1.05)",
+    "translate(-20px, -20px) scale(1)",
   );
   expect(animations[1].keyframes.at(-1).transform).toContain(
     "translate(0px, 0px) scale(1)",
@@ -1576,6 +2192,53 @@ test("board animator keeps a Knight shield until the Death ramp hop is reached",
 
   globalThis.setTimeout = previousSetTimeout;
   globalThis.clearTimeout = previousClearTimeout;
+});
+
+test("board animator delays Toad ramp shield stripping until the jumped piece is crossed", () => {
+  const previousSetTimeout = globalThis.setTimeout;
+  const timers = [];
+  globalThis.setTimeout = (fn, ms) => {
+    timers.push({ fn, ms });
+    return timers.length;
+  };
+
+  const pieceEl = new FakeElement("span");
+  pieceEl.dataset.pieceId = "enemy-ramp";
+  pieceEl.className = "piece black";
+  const animator = new BoardAnimator({
+    querySelectorAll: (selector) =>
+      selector === "[data-piece-id]" ? [pieceEl] : [],
+    querySelector: () => null,
+  });
+
+  animator.animateStaticShieldStrips(
+    {
+      pieces: new Map([
+        ["enemy-ramp", { className: "piece black has-shield" }],
+      ]),
+    },
+    {
+      mode: "toadRamp",
+      shieldStrips: [
+        {
+          pieceId: "enemy-ramp",
+          square: { r: 4, c: 6 },
+          pathIndex: 0,
+        },
+      ],
+      rampSequence: [{ ramp: { r: 4, c: 6 }, land: { r: 3, c: 7 } }],
+      path: [{ r: 4, c: 6 }],
+    },
+  );
+
+  expect(pieceEl.className).toContain("has-shield");
+  expect(timers).toHaveLength(1);
+  expect(timers[0].ms).toBeGreaterThan(40);
+  expect(timers[0].ms).toBeLessThan(160);
+  timers[0].fn();
+  expect(pieceEl.className).not.toContain("has-shield");
+
+  globalThis.setTimeout = previousSetTimeout;
 });
 
 test("board animator delays Life pass-through shield gain until the Life square is crossed", () => {
@@ -1824,8 +2487,8 @@ test("board animator applies new intimidation visuals when the moving checker la
   expect(pieceEl.className).not.toContain("is-intimidated");
   expect(pieceEl.className).toContain("has-shield");
   expect(timers).toHaveLength(1);
-  expect(timers[0].ms).toBeGreaterThan(180);
-  expect(timers[0].ms).toBeLessThan(280);
+  expect(timers[0].ms).toBeGreaterThan(80);
+  expect(timers[0].ms).toBeLessThan(160);
 
   timers[0].fn();
   expect(pieceEl.className).toContain("is-intimidated");
@@ -1911,7 +2574,7 @@ test("board animator moves a Death-destroyed shieldless piece to the Death squar
   globalThis.clearTimeout = previousClearTimeout;
 });
 
-test("Knight ramp timing is 600ms per hop", () => {
+test("Knight ramp timing is tightened per hop", () => {
   const action = {
     mode: "knightRamp",
     rampSequence: [{ ramp: { r: 5, c: 6 }, land: { r: 5, c: 7 } }],
@@ -1930,6 +2593,474 @@ test("Knight ramp timing is 600ms per hop", () => {
   expect(moveAnimationDurationForAction(doubleAction)).toBe(
     ANIMATION_TIMING.doubleRampHopDurationMs * 2,
   );
+});
+
+test("board animator fades wrapped moves out and in across board edges", async () => {
+  const previousDocument = globalThis.document;
+  const appended = [];
+  const animations = [];
+  globalThis.document = {
+    createElement: (tagName) => {
+      const element = new FakeElement(tagName);
+      element.animate = (keyframes, options) => {
+        animations.push({ element, keyframes, options });
+        return { finished: Promise.resolve() };
+      };
+      element.remove = () => {
+        element.removed = true;
+      };
+      return element;
+    },
+  };
+
+  const squareEl = new FakeElement("button");
+  const pieceEl = new FakeElement("span");
+  pieceEl.dataset.pieceId = "rook";
+  pieceEl.className = "piece white";
+  pieceEl.getBoundingClientRect = () => ({
+    left: 90,
+    top: 50,
+    width: 10,
+    height: 10,
+  });
+  pieceEl.closest = () => squareEl;
+  pieceEl.animate = (keyframes, options) => {
+    animations.push({ element: pieceEl, keyframes, options });
+    return { finished: Promise.resolve() };
+  };
+  const board = {
+    querySelectorAll: (selector) =>
+      selector === "[data-piece-id]" ? [pieceEl] : [],
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+    }),
+    appendChild: (element) => {
+      appended.push(element);
+      return element;
+    },
+  };
+  const action = {
+    kind: "move",
+    mode: "slide",
+    pieceId: "rook",
+    pieceType: PIECE_TYPES.ROOK,
+    from: { r: 5, c: 1 },
+    path: [{ r: 5, c: 0 }],
+    to: { r: 5, c: 9 },
+  };
+  const wrappedDuration = moveAnimationDurationForAction(action);
+
+  new BoardAnimator(board).animateMovement(
+    {
+      pieces: new Map([
+        [
+          "rook",
+          {
+            rect: { left: 10, top: 50, width: 10, height: 10 },
+            className: "piece white",
+            textContent: "R",
+          },
+        ],
+      ]),
+      squares: new Map(),
+      squarePieces: new Map(),
+    },
+    action,
+  );
+
+  expect(moveAnimationDurationForAction(action)).toBe(wrappedDuration);
+  expect(appended).toHaveLength(1);
+  expect(appended[0].className).toContain("wrapped-exit");
+  expect(animations).toHaveLength(2);
+  expect(animations[0].options.duration).toBe(
+    Math.round(wrappedDuration * 0.56),
+  );
+  expect(animations[0].keyframes.at(-1).transform).toContain("translate(-");
+  expect(animations[1].options.duration).toBe(wrappedDuration);
+  expect(animations[1].keyframes[0].transform).toContain("translate(15px");
+
+  await Promise.resolve();
+  globalThis.document = previousDocument;
+});
+
+test("wrapped diagonal moves follow their diagonal path across board edges", () => {
+  const previousDocument = globalThis.document;
+  const appended = [];
+  const animations = [];
+  globalThis.document = {
+    createElement: (tagName) => {
+      const element = new FakeElement(tagName);
+      element.animate = (keyframes, options) => {
+        animations.push({ element, keyframes, options });
+        return { finished: new Promise(() => {}) };
+      };
+      element.remove = () => {};
+      return element;
+    },
+  };
+
+  const squareEl = new FakeElement("button");
+  const pieceEl = new FakeElement("span");
+  pieceEl.dataset.pieceId = "bishop";
+  pieceEl.className = "piece white";
+  pieceEl.getBoundingClientRect = () => ({
+    left: 10,
+    top: 80,
+    width: 10,
+    height: 10,
+  });
+  pieceEl.closest = () => squareEl;
+  pieceEl.animate = (keyframes, options) => {
+    animations.push({ element: pieceEl, keyframes, options });
+    return { finished: new Promise(() => {}) };
+  };
+  const board = {
+    querySelectorAll: (selector) =>
+      selector === "[data-piece-id]" ? [pieceEl] : [],
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+    }),
+    appendChild: (element) => {
+      appended.push(element);
+      return element;
+    },
+  };
+  const action = {
+    kind: "move",
+    mode: "slide",
+    pieceId: "bishop",
+    pieceType: PIECE_TYPES.BISHOP,
+    from: { r: 4, c: 7 },
+    path: [
+      { r: 5, c: 8 },
+      { r: 6, c: 9 },
+      { r: 7, c: 0 },
+    ],
+    to: { r: 8, c: 1 },
+  };
+
+  new BoardAnimator(board).animateMovement(
+    {
+      pieces: new Map([
+        [
+          "bishop",
+          {
+            rect: { left: 70, top: 40, width: 10, height: 10 },
+            className: "piece white",
+            textContent: "B",
+          },
+        ],
+      ]),
+      squares: new Map([
+        ["5,8", { left: 80, top: 50, width: 10, height: 10 }],
+        ["6,9", { left: 90, top: 60, width: 10, height: 10 }],
+        ["7,0", { left: 0, top: 70, width: 10, height: 10 }],
+      ]),
+      squarePieces: new Map(),
+    },
+    action,
+  );
+
+  const exitFinal = translateNumbers(animations[0].keyframes.at(-1).transform);
+  const entryStart = translateNumbers(animations[1].keyframes[0].transform);
+  expect(Math.abs(exitFinal.y)).toBeGreaterThan(1);
+  expect(Math.abs(entryStart.y)).toBeGreaterThan(1);
+  expect(animations[1].options.fill).toBe("forwards");
+
+  globalThis.document = previousDocument;
+});
+
+test("wrapped edge-origin diagonal and Knight moves keep vertical fade vectors", () => {
+  const previousDocument = globalThis.document;
+  const animations = [];
+  globalThis.document = {
+    createElement: (tagName) => {
+      const element = new FakeElement(tagName);
+      element.animate = (keyframes, options) => {
+        animations.push({ element, keyframes, options });
+        return { finished: new Promise(() => {}) };
+      };
+      element.remove = () => {};
+      return element;
+    },
+  };
+
+  const squareEl = new FakeElement("button");
+  const pieceEl = new FakeElement("span");
+  pieceEl.dataset.pieceId = "bishop";
+  pieceEl.className = "piece white";
+  pieceEl.getBoundingClientRect = () => ({
+    left: 90,
+    top: 50,
+    width: 10,
+    height: 10,
+  });
+  pieceEl.closest = () => squareEl;
+  pieceEl.animate = (keyframes, options) => {
+    animations.push({ element: pieceEl, keyframes, options });
+    return { finished: new Promise(() => {}) };
+  };
+  const board = {
+    querySelectorAll: (selector) =>
+      selector === "[data-piece-id]" ? [pieceEl] : [],
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+    }),
+    appendChild: (element) => element,
+  };
+  const animator = new BoardAnimator(board);
+
+  animator.animateMovement(
+    {
+      pieces: new Map([
+        [
+          "bishop",
+          {
+            rect: { left: 0, top: 40, width: 10, height: 10 },
+            className: "piece white",
+            textContent: "B",
+          },
+        ],
+      ]),
+      squares: new Map(),
+      squarePieces: new Map(),
+    },
+    {
+      kind: "move",
+      mode: "slide",
+      pieceId: "bishop",
+      pieceType: PIECE_TYPES.BISHOP,
+      from: { r: 4, c: 0 },
+      path: [],
+      to: { r: 5, c: 9 },
+    },
+  );
+
+  let exitFinal = translateNumbers(animations[0].keyframes.at(-1).transform);
+  let entryStart = translateNumbers(animations[1].keyframes[0].transform);
+  expect(Math.abs(exitFinal.y)).toBeGreaterThan(1);
+  expect(Math.abs(entryStart.y)).toBeGreaterThan(1);
+
+  animations.length = 0;
+  pieceEl.dataset.pieceId = "knight";
+  pieceEl.getBoundingClientRect = () => ({
+    left: 80,
+    top: 50,
+    width: 10,
+    height: 10,
+  });
+
+  animator.animateMovement(
+    {
+      pieces: new Map([
+        [
+          "knight",
+          {
+            rect: { left: 0, top: 40, width: 10, height: 10 },
+            className: "piece white",
+            textContent: "N",
+          },
+        ],
+      ]),
+      squares: new Map(),
+      squarePieces: new Map(),
+    },
+    {
+      kind: "move",
+      mode: "knightMove",
+      pieceId: "knight",
+      pieceType: PIECE_TYPES.KNIGHT,
+      from: { r: 4, c: 0 },
+      path: [],
+      to: { r: 5, c: 8 },
+    },
+  );
+
+  exitFinal = translateNumbers(animations[0].keyframes.at(-1).transform);
+  entryStart = translateNumbers(animations[1].keyframes[0].transform);
+  expect(Math.abs(exitFinal.y)).toBeGreaterThan(1);
+  expect(Math.abs(entryStart.y)).toBeGreaterThan(1);
+
+  globalThis.document = previousDocument;
+});
+
+test("wrapped Life and Death moves preserve their subdued opacity", () => {
+  const previousDocument = globalThis.document;
+  const animations = [];
+  globalThis.document = {
+    createElement: (tagName) => {
+      const element = new FakeElement(tagName);
+      element.animate = (keyframes, options) => {
+        animations.push({ element, keyframes, options });
+        return { finished: new Promise(() => {}) };
+      };
+      element.remove = () => {};
+      return element;
+    },
+  };
+
+  const pieceEl = new FakeElement("span");
+  pieceEl.dataset.pieceId = "life";
+  pieceEl.className = "piece white life-piece";
+  pieceEl.style = {};
+  pieceEl.getBoundingClientRect = () => ({
+    left: 90,
+    top: 50,
+    width: 10,
+    height: 10,
+  });
+  pieceEl.closest = () => new FakeElement("button");
+  pieceEl.animate = (keyframes, options) => {
+    animations.push({ element: pieceEl, keyframes, options });
+    return { finished: new Promise(() => {}) };
+  };
+  const board = {
+    querySelectorAll: (selector) =>
+      selector === "[data-piece-id]" ? [pieceEl] : [],
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+    }),
+    appendChild: (element) => element,
+  };
+
+  new BoardAnimator(board).animateMovement(
+    {
+      pieces: new Map([
+        [
+          "life",
+          {
+            rect: { left: 10, top: 50, width: 10, height: 10 },
+            className: "piece white life-piece",
+            textContent: "L",
+          },
+        ],
+      ]),
+      squares: new Map(),
+      squarePieces: new Map(),
+    },
+    {
+      kind: "move",
+      mode: "lifeDeathMove",
+      pieceId: "life",
+      pieceType: PIECE_TYPES.LIFE,
+      from: { r: 5, c: 1 },
+      path: [{ r: 5, c: 0 }],
+      to: { r: 5, c: 9 },
+    },
+  );
+
+  const opacities = animations.flatMap((animation) =>
+    animation.keyframes.flatMap((frame) =>
+      typeof frame.opacity === "number" ? [frame.opacity] : [],
+    ),
+  );
+  expect(Math.max(...opacities)).toBeLessThanOrEqual(0.72);
+  expect(animations[1].keyframes.at(-1).opacity).toBe(0.72);
+
+  globalThis.document = previousDocument;
+});
+
+test("wrapped moves apply final shield visuals at the entry landing point", () => {
+  const previousDocument = globalThis.document;
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.document = {
+    createElement: (tagName) => {
+      const element = new FakeElement(tagName);
+      element.animate = () => ({ finished: new Promise(() => {}) });
+      element.remove = () => {
+        element.removed = true;
+      };
+      return element;
+    },
+  };
+  globalThis.setTimeout = (fn, ms) => {
+    const timer = { fn, ms, cleared: false };
+    timers.push(timer);
+    return timer;
+  };
+  globalThis.clearTimeout = (timer) => {
+    if (timer) timer.cleared = true;
+  };
+
+  const squareEl = new FakeElement("button");
+  const pieceEl = new FakeElement("span");
+  pieceEl.dataset.pieceId = "rook";
+  pieceEl.className = "piece white frame-shield-suppressed";
+  pieceEl.getBoundingClientRect = () => ({
+    left: 90,
+    top: 50,
+    width: 10,
+    height: 10,
+  });
+  pieceEl.closest = () => squareEl;
+  pieceEl.animate = () => ({ finished: new Promise(() => {}) });
+  const board = {
+    querySelectorAll: (selector) =>
+      selector === "[data-piece-id]" ? [pieceEl] : [],
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+    }),
+    appendChild: (element) => element,
+    querySelector: () => null,
+  };
+  const action = {
+    kind: "move",
+    mode: "slide",
+    pieceId: "rook",
+    pieceType: PIECE_TYPES.ROOK,
+    from: { r: 8, c: 1 },
+    path: [{ r: 8, c: 0 }],
+    to: { r: 8, c: 9 },
+  };
+
+  new BoardAnimator(board).animateMovement(
+    {
+      pieces: new Map([
+        [
+          "rook",
+          {
+            rect: { left: 10, top: 50, width: 10, height: 10 },
+            className: "piece white has-shield",
+            textContent: "R",
+          },
+        ],
+      ]),
+      squares: new Map(),
+      squarePieces: new Map(),
+    },
+    action,
+  );
+
+  expect(pieceEl.className).toContain("has-shield");
+  expect(pieceEl.className).toContain("frame-shield-suppressed");
+  expect(timers).toHaveLength(1);
+  expect(timers[0].ms).toBeLessThan(moveAnimationDurationForAction(action));
+
+  timers[0].fn();
+  expect(pieceEl.className).not.toContain("has-shield");
+  expect(pieceEl.className).toContain("frame-shield-suppressed");
+  expect(pieceEl.className).toContain("is-moving");
+
+  globalThis.document = previousDocument;
+  globalThis.setTimeout = previousSetTimeout;
+  globalThis.clearTimeout = previousClearTimeout;
 });
 
 test("single Knight ramp keeps the ramp hop easing", () => {
@@ -2026,7 +3157,12 @@ test("board animator uses board-level castling ghosts above board squares", () =
   const animator = new BoardAnimator({
     querySelectorAll: (selector) =>
       selector === "[data-piece-id]" ? pieces : [],
-    getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 100 }),
+    getBoundingClientRect: () => ({
+      left: 10,
+      top: 20,
+      width: 100,
+      height: 100,
+    }),
     appendChild: (element) => {
       appended.push(element);
       return element;
@@ -2064,9 +3200,9 @@ test("board animator uses board-level castling ghosts above board squares", () =
   );
 
   expect(appended).toHaveLength(2);
-  expect(appended.every((element) => element.className.includes("castling-ghost"))).toBe(
-    true,
-  );
+  expect(
+    appended.every((element) => element.className.includes("castling-ghost")),
+  ).toBe(true);
   expect(animations).toHaveLength(2);
   expect(pieces[0].style.visibility).toBe("hidden");
   expect(pieces[1].style.visibility).toBe("hidden");
@@ -2138,12 +3274,27 @@ test("settings persist and AI slider maps to stronger search options", () => {
     aiLevel: 5,
     animationsEnabled: false,
     playerSide: "black",
+    variantId: "frame-chess",
   });
   saveSettings(
     { aiLevel: 0, animationsEnabled: true, playerSide: "white" },
     storage,
   );
   expect(loadSettings(storage).aiLevel).toBe(0);
+  expect(loadSettings(null)).toEqual({
+    aiLevel: 0,
+    animationsEnabled: true,
+    playerSide: "white",
+    variantId: "frame-chess",
+  });
+  expect(
+    loadSettings({
+      getItem: (key) =>
+        key === "chess-two-settings"
+          ? JSON.stringify({ variantId: "toad-fool" })
+          : null,
+    }).variantId,
+  ).toBe("frame-chess");
   expect(aiLabelForLevel(0)).toBe("Off (self-play)");
   for (const level of [1, 2, 3, 4]) {
     expect(aiOptionsForLevel(level).maxDepth).toBe(level);
@@ -2183,6 +3334,502 @@ test("settings persist and AI slider maps to stronger search options", () => {
   expect(aiOptionsForLevel(4).thinkDelay).toBeLessThan(
     aiOptionsForLevel(2).thinkDelay,
   );
+});
+
+test("controller AI worker timeout cleanup uses only live worker state", () => {
+  const controllerSource = readFileSync(
+    new URL("../src/ui/controller.js", import.meta.url),
+    "utf8",
+  );
+
+  expect(controllerSource).toContain('cleanupWorker(worker);');
+  expect(controllerSource).not.toContain("inlineSource");
+});
+
+test("controller starts on persisted Frame Chess defaults and can switch variants", () => {
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  const store = new Map();
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    addEventListener() {},
+  };
+  globalThis.localStorage = {
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, value) => store.set(key, value),
+  };
+
+  const devPanel = makeDeveloperPanel();
+  const controller = new GameController({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: devPanel,
+  });
+
+  expect(controller.state.variantId).toBe("frame-chess");
+  expect(controller.settings.aiLevel).toBe(0);
+  const variantSelect = findById(devPanel, "variant-select");
+  expect(
+    variantSelect.children.some(
+      (option) =>
+        option.value === "toad-fool-classic" &&
+        option.textContent === "Toad-Fool Classic",
+    ),
+  ).toBe(true);
+  expect(
+    variantSelect.children.some(
+      (option) =>
+        option.value === "frame-chess" && option.textContent === "Frame Chess",
+    ),
+  ).toBe(true);
+  expect(
+    variantSelect.children.some(
+      (option) =>
+        option.value === "frame-chess-without-ld" &&
+        option.textContent === "Frame Chess w/o LD",
+    ),
+  ).toBe(true);
+  variantSelect.value = "toad-fool-classic";
+  controller.handleDeveloperInput({ target: variantSelect });
+  expect(controller.state.variantId).toBe("toad-fool-classic");
+  expect(controller.state.board[0][0].type).toBe(PIECE_TYPES.DEATH);
+  expect(controller.state.ruleOverrides.checkPattern).toBe("standard");
+  expect(findById(devPanel, "check-pattern-select").value).toBe("standard");
+
+  variantSelect.value = "frame-chess";
+  controller.handleDeveloperInput({ target: variantSelect });
+  expect(controller.state.variantId).toBe("frame-chess");
+  expect(controller.state.ruleOverrides.checkPattern).toBe("standard");
+  expect(controller.state.ruleOverrides.frameEnabled).toBe(true);
+  expect(controller.state.ruleOverrides.wraparoundEnabled).toBe(true);
+  expect(controller.state.board[0][0].type).toBe(PIECE_TYPES.DEATH);
+  expect(controller.state.board[9][0].type).toBe(PIECE_TYPES.LIFE);
+  expect(controller.state.board[2][0]).toBe(null);
+
+  const wrappedRookMove = generateLegalActions(controller.state).find(
+    (action) =>
+      action.pieceType === PIECE_TYPES.ROOK &&
+      action.from?.r === 8 &&
+      action.from?.c === 2 &&
+      action.to?.r === 8 &&
+      action.to?.c === 9,
+  );
+  expect(wrappedRookMove).toBeDefined();
+  controller.state = applyAction(controller.state, wrappedRookMove);
+  controller.render();
+  expect(variantSelect.value).toBe("frame-chess");
+
+  variantSelect.value = "frame-chess-without-ld";
+  controller.handleDeveloperInput({ target: variantSelect });
+  expect(controller.state.variantId).toBe("frame-chess-without-ld");
+  expect(
+    controller.state.board
+      .flat()
+      .some(
+        (piece) =>
+          piece?.type === PIECE_TYPES.LIFE || piece?.type === PIECE_TYPES.DEATH,
+      ),
+  ).toBe(false);
+
+  variantSelect.value = "chess-two";
+  controller.handleDeveloperInput({ target: variantSelect });
+
+  expect(controller.state.variantId).toBe("chess-two");
+  expect(controller.state.board[0][0].type).toBe(PIECE_TYPES.DEATH);
+  expect(
+    JSON.parse(store.get("chess-two-settings-v2-frame-default")).variantId,
+  ).toBe("chess-two");
+
+  const pawnMax = findById(devPanel, "pawn-initial-max-step-select");
+  pawnMax.value = "2";
+  controller.handleDeveloperInput({ target: pawnMax });
+  expect(controller.state.ruleOverrides.pawnInitialMaxStep).toBe(2);
+  expect(variantSelect.value).toBe("custom:chess-two");
+  expect(
+    variantSelect.children.some(
+      (option) =>
+        option.value === "custom:chess-two" &&
+        option.textContent === "Custom: Chess Two",
+    ),
+  ).toBe(true);
+
+  variantSelect.value = "chess-two";
+  controller.handleDeveloperInput({ target: variantSelect });
+  expect(controller.state.variantId).toBe("chess-two");
+  expect(controller.state.ruleOverrides.pawnInitialMaxStep).toBe(3);
+  expect(variantSelect.value).toBe("chess-two");
+
+  globalThis.document = previousDocument;
+  globalThis.localStorage = previousLocalStorage;
+});
+
+test("controller status reports the selected Fool copied behavior", () => {
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    addEventListener() {},
+  };
+  globalThis.localStorage = null;
+
+  const status = makeStatusPanel();
+  const controller = new GameController({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: status,
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: makeDeveloperPanel(),
+  });
+
+  controller.state = createEmptyState(COLORS.WHITE, { variantId: "toad-fool" });
+  controller.state.foolMemory[COLORS.BLACK] = { type: PIECE_TYPES.KNIGHT };
+  const fool = placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.WHITE, 5, 5, { id: "white-fool" }),
+  );
+  controller.selectPiece(fool);
+  expect(status.querySelector("#phase-info").textContent).toBe(
+    "Fool selected: imitating Knight.",
+  );
+  controller.state.turn.standardMoveMade = true;
+  controller.selectPiece(fool);
+  expect(status.querySelector("#phase-info").textContent).toBe(
+    "Fool selected: imitating Knight, but has no legal action in the remaining turn slots.",
+  );
+
+  controller.state = createEmptyState(COLORS.WHITE, { variantId: "toad-fool" });
+  const emptyFool = placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.WHITE, 5, 5, { id: "empty-fool" }),
+  );
+  controller.selectPiece(emptyFool);
+  expect(status.querySelector("#phase-info").textContent).toBe(
+    "Fool selected: no copied behavior yet.",
+  );
+
+  globalThis.document = previousDocument;
+  globalThis.localStorage = previousLocalStorage;
+});
+
+test("controller prefers Toad ramp routes that strip enemy shields", () => {
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    addEventListener() {},
+  };
+  globalThis.localStorage = null;
+
+  const controller = new GameController({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: makeDeveloperPanel(),
+  });
+  controller.state = createEmptyState(COLORS.WHITE, { variantId: "toad-fool" });
+  const toad = placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 5, 5, { id: "white-toad" }),
+  );
+  placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 5, 6, {
+      id: "direct-ramp",
+    }),
+  );
+  placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 5, {
+      id: "route-ramp",
+    }),
+  );
+  placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 4, 6, {
+      id: "stripped-ramp",
+      hasShield: true,
+    }),
+  );
+
+  controller.selectPiece(toad);
+  expect(
+    controller.view.selectedActions.filter(
+      (action) =>
+        action.mode === "toadRamp" && action.to.r === 5 && action.to.c === 7,
+    ).length,
+  ).toBeGreaterThan(1);
+
+  controller.tryDestination(5, 7);
+
+  expect(controller.state.board[4][6]?.hasShield).toBe(false);
+  expect(controller.state.board[5][7]?.id).toBe("white-toad");
+  expect(controller.state.lastAction.shieldStrips).toHaveLength(1);
+
+  globalThis.document = previousDocument;
+  globalThis.localStorage = previousLocalStorage;
+});
+
+test("developer panel collapse keeps controls available but removes visual weight", () => {
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    addEventListener() {},
+  };
+  globalThis.localStorage = null;
+
+  const devPanel = makeDeveloperPanel();
+  const controller = new GameController({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: devPanel,
+  });
+
+  controller.handleDeveloperClick({
+    target: {
+      closest: () => ({ dataset: { devAction: "toggle-collapse" } }),
+    },
+  });
+
+  expect(controller.developer.collapsed).toBe(true);
+  expect(devPanel.className).toContain("is-collapsed");
+  expect(findById(devPanel, "dev-collapse-button").textContent).toBe("Dev");
+  expect(
+    findById(devPanel, "dev-collapse-button").attributes["aria-expanded"],
+  ).toBe("false");
+
+  globalThis.document = previousDocument;
+  globalThis.localStorage = previousLocalStorage;
+});
+
+test("developer panel hot-swaps rule overrides and turn slots", () => {
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    addEventListener() {},
+  };
+  globalThis.localStorage = null;
+
+  const devPanel = makeDeveloperPanel();
+  const controller = new GameController({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: devPanel,
+  });
+
+  const checkPattern = findById(devPanel, "check-pattern-select");
+  checkPattern.value = "standard";
+  controller.handleDeveloperInput({ target: checkPattern });
+  expect(controller.state.ruleOverrides.checkPattern).toBe("standard");
+
+  const pawnPreset = findById(devPanel, "pawn-behavior-select");
+  pawnPreset.value = "chessTwo";
+  controller.handleDeveloperInput({ target: pawnPreset });
+  expect(controller.state.ruleOverrides.pawnBehavior).toBe("chessTwo");
+  pawnPreset.value = "frontalFan2";
+  controller.handleDeveloperInput({ target: pawnPreset });
+  expect(controller.state.ruleOverrides.pawnBehavior).toBe("frontalFan2");
+
+  controller.state.enPassant = {
+    pieceId: "stale",
+    eligibleColor: COLORS.WHITE,
+    crossed: [],
+  };
+  const pawnMax = findById(devPanel, "pawn-initial-max-step-select");
+  pawnMax.value = "3";
+  controller.handleDeveloperInput({ target: pawnMax });
+  expect(controller.state.ruleOverrides.pawnInitialMaxStep).toBe(3);
+  expect(controller.state.enPassant).toBe(null);
+
+  const knightPreset = findById(devPanel, "knight-movement-select");
+  knightPreset.value = "ramp";
+  controller.handleDeveloperInput({ target: knightPreset });
+  expect(controller.state.ruleOverrides.knightMovement).toBe("ramp");
+
+  controller.state.enPassant = {
+    pieceId: "stale-frame",
+    eligibleColor: COLORS.WHITE,
+    crossed: [],
+  };
+  const frameEnabled = findById(devPanel, "frame-enabled");
+  frameEnabled.checked = true;
+  controller.handleDeveloperInput({ target: frameEnabled });
+  expect(controller.state.ruleOverrides.frameEnabled).toBe(true);
+  expect(controller.state.enPassant).toBe(null);
+
+  const wraparoundEnabled = findById(devPanel, "wraparound-enabled");
+  wraparoundEnabled.checked = true;
+  controller.handleDeveloperInput({ target: wraparoundEnabled });
+  expect(controller.state.ruleOverrides.wraparoundEnabled).toBe(true);
+
+  const checkmateDisabled = findById(devPanel, "checkmate-disabled");
+  checkmateDisabled.checked = true;
+  controller.handleDeveloperInput({ target: checkmateDisabled });
+  expect(controller.state.ruleOverrides.checkmateEnabled).toBe(false);
+
+  const shieldless = findById(devPanel, "shields-disabled");
+  shieldless.checked = true;
+  controller.handleDeveloperInput({ target: shieldless });
+  expect(controller.state.ruleOverrides.shieldsEnabled).toBe(false);
+  expect(controller.state.board.flat().some((piece) => piece?.hasShield)).toBe(
+    false,
+  );
+  controller.newGame();
+  expect(controller.state.ruleOverrides.shieldsEnabled).toBe(false);
+  expect(controller.state.board.flat().some((piece) => piece?.hasShield)).toBe(
+    false,
+  );
+  shieldless.checked = false;
+  controller.handleDeveloperInput({ target: shieldless });
+  expect(controller.state.ruleOverrides.shieldsEnabled).toBe(true);
+  expect(controller.state.board[7][4].hasShield).toBe(true);
+
+  const player = findById(devPanel, "dev-current-player");
+  player.value = "black";
+  controller.handleDeveloperInput({ target: player });
+  expect(controller.state.currentPlayer).toBe(COLORS.BLACK);
+
+  controller.state = createEmptyState(COLORS.WHITE, { variantId: "toad-fool" });
+  placePiece(
+    controller.state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 5, 5, { id: "life" }),
+  );
+  const standard = findById(devPanel, "dev-standard-used");
+  standard.checked = true;
+  controller.handleDeveloperInput({ target: standard });
+  expect(controller.state.turn.standardMoveMade).toBe(true);
+
+  globalThis.document = previousDocument;
+  globalThis.localStorage = previousLocalStorage;
+});
+
+test("developer panel imports, exports, and edits board state", async () => {
+  const previousDocument = globalThis.document;
+  const previousLocalStorage = globalThis.localStorage;
+  const previousNavigator = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "navigator",
+  );
+  const copiedText = [];
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+    addEventListener() {},
+  };
+  globalThis.localStorage = null;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async (text) => {
+          copiedText.push(text);
+        },
+      },
+    },
+  });
+
+  const devPanel = makeDeveloperPanel();
+  const controller = new GameController({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: devPanel,
+  });
+  expect(findByDataset(devPanel, "devAction", "undo-board-edit").disabled).toBe(
+    true,
+  );
+
+  const defaultLeftRookId = controller.state.board[8][2].id;
+  await controller.exportFen();
+  expect(controller.developer.fenText).toContain("2RNTFBR2");
+  expect(copiedText).toEqual([controller.developer.fenText]);
+  expect(controller.developer.message).toBe("FEN copied.");
+  expect(controller.developer.toastMessage).toBe("Copied");
+  expect(findById(devPanel, "dev-toast").hidden).toBe(false);
+  expect(findById(devPanel, "dev-toast").textContent).toBe("Copied");
+  controller.importFen();
+  expect(controller.state.board[8][2].id).toBe(defaultLeftRookId);
+  controller.developer.fenText =
+    "91/1rbtqkfnr1/pppppppppp/91/91/91/91/PPPPPPPPPP/1RNTQKFBR1/91 w - - 0 1";
+  controller.importFen();
+  expect(controller.state.board[1][6].type).toBe(PIECE_TYPES.FOOL);
+
+  controller.developer.boardEditEnabled = true;
+  controller.developer.editPieceType = PIECE_TYPES.TOAD;
+  controller.developer.editPieceColor = COLORS.WHITE;
+  controller.developer.editPieceShield = true;
+  controller.handleBoardClick({
+    target: { closest: () => ({ dataset: { row: "4", col: "4" } }) },
+  });
+  expect(controller.state.board[4][4].type).toBe(PIECE_TYPES.TOAD);
+  expect(controller.state.board[4][4].hasShield).toBe(true);
+
+  controller.state.ruleOverrides = {
+    ...controller.state.ruleOverrides,
+    shieldsEnabled: false,
+  };
+  controller.developer.fenText =
+    "91/1rbtqkfnr1/pppppppppp/91/91/91/91/PPPPPPPPPP/1RNTQKFBR1/91 w - - 0 1";
+  controller.importFen();
+  expect(controller.state.ruleOverrides.shieldsEnabled).toBe(false);
+  expect(controller.state.board[2][0].hasShield).toBe(false);
+
+  controller.state.actionHistory = [{ kind: "move", mode: "test" }];
+  controller.state.capturedPieces = [{ id: "captured" }];
+  controller.developer.editPieceShield = true;
+  controller.handleBoardClick({
+    target: { closest: () => ({ dataset: { row: "3", col: "3" } }) },
+  });
+  expect(controller.state.board[3][3].type).toBe(PIECE_TYPES.TOAD);
+  expect(controller.state.board[3][3].hasShield).toBe(false);
+  expect(controller.state.actionHistory).toHaveLength(0);
+  expect(controller.state.capturedPieces).toHaveLength(0);
+
+  controller.developer.editPieceType = "";
+  controller.handleBoardClick({
+    target: { closest: () => ({ dataset: { row: "3", col: "3" } }) },
+  });
+  expect(controller.state.board[3][3]).toBe(null);
+  expect(findByDataset(devPanel, "devAction", "undo-board-edit").disabled).toBe(
+    false,
+  );
+  controller.handleDeveloperClick({
+    target: {
+      closest: () => ({ dataset: { devAction: "undo-board-edit" } }),
+    },
+  });
+  expect(controller.state.board[3][3].type).toBe(PIECE_TYPES.TOAD);
+  expect(controller.developer.message).toBe("Board edit undone.");
+
+  globalThis.document = previousDocument;
+  globalThis.localStorage = previousLocalStorage;
+  if (controller.devToastTimer)
+    globalThis.clearTimeout(controller.devToastTimer);
+  if (previousNavigator) {
+    Object.defineProperty(globalThis, "navigator", previousNavigator);
+  } else {
+    delete globalThis.navigator;
+  }
 });
 
 test("renderer locks side controls while AI is enabled and rotates board when AI is off", () => {
@@ -2270,7 +3917,100 @@ test("renderer marks Life and Death pieces with owner glow classes", () => {
   globalThis.document = previousDocument;
 });
 
-test("renderer flips original c-file Knights, d-file Bishops, and black-owned Life or Death", () => {
+test("renderer marks Frame Chess squares, wrap files, and latent shields", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 0, 4, {
+      id: "frame-rook",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 0, 5, {
+      id: "frame-pawn",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 0, 6, {
+      id: "frame-king",
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+
+  const board = new FakeElement("div");
+  const renderer = new Renderer({
+    boardEl: board,
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+  });
+  renderer.render(state, {});
+
+  expect(board.className).toContain("frame-enabled");
+  expect(board.className).toContain("wraparound-enabled");
+  expect(board.children[0].className).toContain("frame-square");
+  expect(board.children[0].className).toContain("wrap-file");
+  expect(board.children[9].className).toContain("wrap-file");
+  expect(board.children[44].className).not.toContain("frame-square");
+  expect(board.children[4].children[0].className).toContain(
+    "frame-shield-suppressed",
+  );
+  expect(board.children[4].children[0].title).toContain(
+    "shield suppressed by frame",
+  );
+  expect(board.children[5].children[0].className).toContain("frame-affected");
+  expect(board.children[5].children[0].title).toContain("limited by frame");
+  expect(board.children[6].children[0].className).not.toContain(
+    "frame-affected",
+  );
+
+  globalThis.document = previousDocument;
+});
+
+test("renderer syncs normalized Frame defaults into Developer Panel controls", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {
+    createElement: (tagName) => new FakeElement(tagName),
+  };
+
+  const state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  delete state.ruleOverrides.frameEnabled;
+  delete state.ruleOverrides.wraparoundEnabled;
+
+  const devPanel = makeDeveloperPanel();
+  const renderer = new Renderer({
+    boardEl: new FakeElement("div"),
+    statusPanelEl: makeStatusPanel(),
+    promotionEl: new FakeElement("div"),
+    controlsEl: makeControls(),
+    settingsEl: makeSettingsPanel(),
+    rulesEl: makeRulesPanel(),
+    devPanelEl: devPanel,
+  });
+  renderer.render(state, {});
+
+  expect(findById(devPanel, "frame-enabled").checked).toBe(true);
+  expect(findById(devPanel, "wraparound-enabled").checked).toBe(true);
+  expect(findById(devPanel, "check-pattern-select").value).toBe("standard");
+
+  globalThis.document = previousDocument;
+});
+
+test("renderer flips configured piece art and variant black Bishops", () => {
   const previousDocument = globalThis.document;
   globalThis.document = {
     createElement: (tagName) => new FakeElement(tagName),
@@ -2307,6 +4047,29 @@ test("renderer flips original c-file Knights, d-file Bishops, and black-owned Li
   expect(board.children[55].children[0].className).toContain("is-flipped");
   expect(board.children[54].children[0].className).not.toContain("is-flipped");
   expect(board.children[90].children[0].className).not.toContain("is-flipped");
+
+  renderer.render(createGameState({ variantId: VARIANT_IDS.TOAD_FOOL }), {});
+  expect(board.children[12].children[0].className).toContain("is-flipped");
+  expect(board.children[82].children[0].className).toContain("is-flipped");
+
+  renderer.render(
+    createGameState({ variantId: VARIANT_IDS.TOAD_FOOL_CLASSIC }),
+    {},
+  );
+  expect(board.children[2].children[0].className).toContain("is-flipped");
+  expect(board.children[92].children[0].className).toContain("is-flipped");
+
+  renderer.render(createGameState({ variantId: VARIANT_IDS.FRAME_CHESS }), {});
+  expect(board.children[13].children[0].className).toContain("is-flipped");
+  expect(board.children[16].children[0].className).not.toContain("is-flipped");
+  expect(board.children[83].children[0].className).toContain("is-flipped");
+
+  renderer.render(
+    createGameState({ variantId: VARIANT_IDS.FRAME_CHESS_WITHOUT_LD }),
+    {},
+  );
+  expect(board.children[12].children[0].className).toContain("is-flipped");
+  expect(board.children[82].children[0].className).toContain("is-flipped");
 
   globalThis.document = previousDocument;
 });
@@ -2531,6 +4294,7 @@ test("controller deselects a selected piece when its own square is clicked", () 
     controlsEl: makeControls(),
     settingsEl: makeSettingsPanel(),
   });
+  controller.state = createGameState({ variantId: "chess-two" });
 
   const pawn = controller.state.board[8][0];
   controller.selectPiece(pawn);
@@ -2631,6 +4395,7 @@ test("controller suppresses the board context menu and deselects on right-click"
     settingsEl: makeSettingsPanel(),
     rulesEl: makeRulesPanel(),
   });
+  controller.state = createGameState({ variantId: "chess-two" });
   controller.selectPiece(controller.state.board[8][0]);
   expect(controller.view.selectedPiece.id).toBe("white-pawn-0");
 
@@ -2713,7 +4478,9 @@ test("controller undo restores the start of the current player turn", () => {
     aiLevel: 0,
     animationsEnabled: false,
     playerSide: "white",
+    variantId: "chess-two",
   };
+  controller.state = createGameState({ variantId: "chess-two" });
 
   const before = JSON.stringify(controller.state);
   const pawn = controller.state.board[8][4];

@@ -1,12 +1,12 @@
-import { canHaveShield } from "../engine/constants.js";
+import { BOARD_SIZE, canHaveShield } from "../engine/constants.js";
 
 export const ANIMATION_TIMING = Object.freeze({
-  effectDurationMs: 520,
-  moveDurationMs: 800,
-  doubleRampHopDurationMs: 600,
-  newPieceDurationMs: 260,
-  removedPieceDurationMs: 560,
-  turnAdvanceDelayMs: 430,
+  effectDurationMs: 380,
+  moveDurationMs: 520,
+  doubleRampHopDurationMs: 340,
+  newPieceDurationMs: 180,
+  removedPieceDurationMs: 400,
+  turnAdvanceDelayMs: 300,
 });
 
 const {
@@ -22,17 +22,24 @@ const MOVE_EASING_X1 = 0.18;
 const MOVE_EASING_Y1 = 0.82;
 const MOVE_EASING_X2 = 0.22;
 const MOVE_EASING_Y2 = 1;
-const NORMAL_MOVE_FINAL_OFFSET = 0.82;
-const NORMAL_MOVE_STABLE_OFFSET = 0.86;
+const NORMAL_MOVE_FINAL_OFFSET = 0.72;
+const NORMAL_MOVE_STABLE_OFFSET = 0.78;
 const MIN_PATH_EVENT_DELAY = 42;
+const WRAP_MOVE_MULTIPLIER = 1.22;
+const WRAP_ENTRY_REVEAL_OFFSET = 0.22;
+const WRAP_ENTRY_APPROACH_OFFSET = 0.4;
+const WRAP_ENTRY_STABLE_OFFSET = 0.62;
 
 export function moveAnimationDurationForAction(action = null) {
-  const hopCount =
-    action?.mode === "knightRamp"
-      ? Math.max(1, action.rampSequence?.length ?? 1)
-      : 1;
-  if (action?.mode === "knightRamp") return DOUBLE_RAMP_HOP_DURATION * hopCount;
-  return MOVE_DURATION;
+  const hopCount = isRampAction(action)
+    ? Math.max(1, action.rampSequence?.length ?? 1)
+    : 1;
+  const baseDuration = isRampAction(action)
+    ? DOUBLE_RAMP_HOP_DURATION * hopCount
+    : MOVE_DURATION;
+  return isWrappedAction(action)
+    ? Math.round(baseDuration * WRAP_MOVE_MULTIPLIER)
+    : baseDuration;
 }
 
 export class BoardAnimator {
@@ -81,8 +88,40 @@ export class BoardAnimator {
     if (!enabled || this.prefersReducedMotion) return;
     const snapshot = normalizeSnapshot(previous);
     this.animateMovement(snapshot, action);
+    this.animateStaticShieldStrips(snapshot, action);
     this.animateRemovedPieces(snapshot, action);
     this.animateEffects(action);
+  }
+
+  animateStaticShieldStrips(previous, action = null) {
+    const strips = action?.shieldStrips ?? [];
+    if (strips.length === 0) return;
+    const currentPieces = [
+      ...(this.boardEl.querySelectorAll?.("[data-piece-id]") ?? []),
+    ];
+    for (const strip of strips) {
+      const pieceEl = currentPieces.find(
+        (candidate) => candidate.dataset?.pieceId === strip.pieceId,
+      );
+      const old = previous.pieces.get(strip.pieceId);
+      if (
+        !pieceEl ||
+        !old ||
+        !hasClass(old.className, "has-shield") ||
+        hasClass(pieceEl.className, "has-shield")
+      ) {
+        continue;
+      }
+      pieceEl.classList.add("has-shield");
+      const timer = globalThis.setTimeout?.(() => {
+        pieceEl.classList.remove("has-shield");
+        this.pulseSquare(strip.square, "shield-hit");
+      }, pathEventTime(action, strip.square, strip.pathIndex ?? 0));
+      if (!timer) {
+        pieceEl.classList.remove("has-shield");
+        this.pulseSquare(strip.square, "shield-hit");
+      }
+    }
   }
 
   animateMovement(previous, action = null) {
@@ -117,9 +156,19 @@ export class BoardAnimator {
           : null;
 
       if (
-        action?.mode === "knightRamp" &&
-        action.pieceId === pieceEl.dataset.pieceId
+        action?.pieceId === pieceEl.dataset.pieceId &&
+        this.animateWrappedMove(
+          pieceEl,
+          old,
+          action,
+          previous,
+          composeCleanups(shieldCleanup, landingStatusCleanup),
+        )
       ) {
+        continue;
+      }
+
+      if (isRampAction(action) && action.pieceId === pieceEl.dataset.pieceId) {
         if (
           this.animateKnightRamp(
             pieceEl,
@@ -151,7 +200,7 @@ export class BoardAnimator {
       const animation = pieceEl.animate(
         [
           {
-            transform: `translate(${dx}px, ${dy}px) scale(1.05)`,
+            transform: `translate(${dx}px, ${dy}px) scale(1)`,
             filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))",
           },
           {
@@ -345,7 +394,7 @@ export class BoardAnimator {
     squareEl?.classList.add("is-animating");
     const zIndexCleanup = raiseAnimatingSquare(
       squareEl,
-      movementZIndexForAction({ mode: "knightRamp" }, pieceEl.dataset.pieceId),
+      movementZIndexForAction({ mode: "ramp" }, pieceEl.dataset.pieceId),
     );
     pieceEl.classList.add("is-moving");
     const animations = [];
@@ -386,6 +435,108 @@ export class BoardAnimator {
     };
 
     runHop(0);
+  }
+
+  animateWrappedMove(
+    pieceEl,
+    old,
+    action,
+    previous,
+    cleanupAfterAnimation = null,
+  ) {
+    const direction = wrappedMoveDirection(action);
+    if (
+      !direction ||
+      !globalThis.document ||
+      !pieceEl.style ||
+      typeof pieceEl.animate !== "function"
+    ) {
+      return false;
+    }
+    const boardRect = this.boardEl.getBoundingClientRect?.();
+    const finalRect = pieceEl.getBoundingClientRect?.();
+    if (!boardRect || !finalRect) return false;
+
+    const ghost = globalThis.document.createElement("span");
+    ghost.className = `piece-ghost ${old.className} wrapped-exit`;
+    setGhostContent(ghost, old);
+    ghost.style.left = `${old.rect.left - boardRect.left}px`;
+    ghost.style.top = `${old.rect.top - boardRect.top}px`;
+    ghost.style.width = `${old.rect.width}px`;
+    ghost.style.height = `${old.rect.height}px`;
+    this.boardEl.appendChild(ghost);
+    if (typeof ghost.animate !== "function") {
+      ghost.remove?.();
+      return false;
+    }
+
+    const squareEl = pieceEl.closest?.(".square");
+    const zIndexCleanup = raiseAnimatingSquare(
+      squareEl,
+      movementZIndexForAction(action, pieceEl.dataset.pieceId),
+    );
+    const previousOpacity = pieceEl.style.opacity;
+    const duration = moveAnimationDurationForAction(action);
+    const exitSign = direction === "left" ? -1 : 1;
+    const entrySign = direction === "left" ? 1 : -1;
+    const exitDistance = Math.max(old.rect.width, finalRect.width) * 1.42;
+    const entryDistance = Math.max(old.rect.width, finalRect.width) * 1.5;
+    const baseOpacity = pieceBaseOpacity(old.className);
+    const movementPlan = wrappedMoveAnimationPlan(
+      action,
+      old.rect,
+      finalRect,
+      previous?.squares,
+      direction,
+      baseOpacity,
+    );
+
+    squareEl?.classList.add("is-animating");
+    pieceEl.classList.add("is-moving");
+    pieceEl.style.opacity = "0";
+
+    const exitAnimation = ghost.animate(
+      movementPlan?.exitKeyframes ??
+        wrappedExitKeyframes(exitSign * exitDistance, baseOpacity),
+      {
+        duration: Math.round(duration * 0.56),
+        easing: MOVE_EASING,
+        fill: "forwards",
+      },
+    );
+    const entryAnimation = pieceEl.animate(
+      movementPlan?.entryKeyframes ??
+        wrappedEntryKeyframes(entrySign * entryDistance, baseOpacity),
+      {
+        duration,
+        easing: MOVE_EASING,
+        fill: "forwards",
+      },
+    );
+
+    let didApplyLandingCleanup = false;
+    const applyLandingCleanup = () => {
+      if (didApplyLandingCleanup) return;
+      didApplyLandingCleanup = true;
+      cleanupAfterAnimation?.();
+    };
+    const landingCleanupTimer = globalThis.setTimeout?.(
+      applyLandingCleanup,
+      wrappedLandingCleanupDelay(action),
+    );
+
+    const cleanup = () => {
+      ghost.remove?.();
+      zIndexCleanup?.();
+      if (landingCleanupTimer) globalThis.clearTimeout?.(landingCleanupTimer);
+      applyLandingCleanup();
+      pieceEl.style.opacity = previousOpacity;
+      pieceEl.classList.remove("is-moving");
+      squareEl?.classList.remove("is-animating");
+    };
+    exitAnimation.finished?.then(() => ghost.remove?.(), () => ghost.remove?.());
+    entryAnimation.finished?.then(cleanup, cleanup);
+    return true;
   }
 
   animateNewPiece(pieceEl) {
@@ -584,7 +735,7 @@ function normalMoveKeyframes(from, to, finalRect) {
   return [
     {
       offset: 0,
-      transform: transformForRect(from, finalRect, 1.05),
+      transform: transformForRect(from, finalRect, 1),
       filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))",
     },
     {
@@ -603,12 +754,12 @@ function doubleRampHopKeyframes(from, to, finalRect, isFinalHop) {
   return [
     {
       offset: 0,
-      transform: transformForRect(from, finalRect, 1.05),
+      transform: transformForRect(from, finalRect, 1),
       filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))",
     },
     {
       offset: 1,
-      transform: transformForRect(to, finalRect, isFinalHop ? 1 : 1.05),
+      transform: transformForRect(to, finalRect, 1),
       filter: isFinalHop
         ? "drop-shadow(0 0 0 rgba(0,0,0,0))"
         : "drop-shadow(0 14px 12px rgba(0,0,0,0.48))",
@@ -623,7 +774,7 @@ function castlingGhostKeyframes(from, to) {
   return [
     {
       offset: 0,
-      transform: "translate(0, 0) scale(1.05)",
+      transform: "translate(0, 0) scale(1)",
       filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48))",
     },
     {
@@ -633,6 +784,218 @@ function castlingGhostKeyframes(from, to) {
     {
       offset: 1,
       transform: finalTransform,
+      filter: "drop-shadow(0 0 0 rgba(0,0,0,0))",
+    },
+  ];
+}
+
+function wrappedMoveAnimationPlan(
+  action,
+  oldRect,
+  finalRect,
+  squares,
+  direction,
+  baseOpacity,
+) {
+  const route = actionRouteSquares(action);
+  const wrapIndex = wrappedTransitionIndex(route);
+  if (wrapIndex < 1) return null;
+
+  const routeRects = route.map((square, index) => {
+    if (index === 0) return oldRect;
+    if (index === route.length - 1) return finalRect;
+    return squares?.get(squareKey(square));
+  });
+  if (routeRects.some((rect) => !rect)) return null;
+
+  const edgeRect = routeRects[wrapIndex - 1];
+  const beforeEdgeRect = routeRects[wrapIndex - 2] ?? edgeRect;
+  const postWrapRect = routeRects[wrapIndex];
+  const vector = movementVector({
+    direction,
+    fromRect: beforeEdgeRect,
+    toRect: edgeRect,
+    fromSquare: route[wrapIndex - 2],
+    toSquare: route[wrapIndex - 1],
+    fallbackFromSquare: route[wrapIndex - 1],
+    fallbackToSquare: route[wrapIndex],
+  });
+  const exitOffboardRect = translateRect(
+    edgeRect,
+    vector.dx * 1.35,
+    vector.dy * 1.35,
+  );
+  const entryOffboardRect = translateRect(
+    postWrapRect,
+    -vector.dx * 1.35,
+    -vector.dy * 1.35,
+  );
+
+  return {
+    exitKeyframes: wrappedExitPathKeyframes(
+      [...routeRects.slice(0, wrapIndex), exitOffboardRect],
+      baseOpacity,
+    ),
+    entryKeyframes: wrappedEntryPathKeyframes(
+      [entryOffboardRect, ...routeRects.slice(wrapIndex)],
+      finalRect,
+      baseOpacity,
+    ),
+  };
+}
+
+function wrappedTransitionIndex(route) {
+  for (let index = 1; index < route.length; index++) {
+    const dc = route[index].c - route[index - 1].c;
+    if (Math.abs(dc) > BOARD_SIZE / 2) return index;
+  }
+  return -1;
+}
+
+function movementVector({
+  direction,
+  fallbackFromSquare,
+  fallbackToSquare,
+  fromRect,
+  fromSquare,
+  toRect,
+  toSquare,
+}) {
+  const dx = toRect.left - fromRect.left;
+  const dy = toRect.top - fromRect.top;
+  if (Math.abs(dx) >= 1 || Math.abs(dy) >= 1) return { dx, dy };
+  const sign = direction === "left" ? -1 : 1;
+  const rowDelta =
+    (fallbackToSquare?.r ?? toSquare?.r ?? 0) -
+    (fallbackFromSquare?.r ?? fromSquare?.r ?? 0);
+  return {
+    dx: Math.max(fromRect.width, toRect.width) * sign,
+    dy: Math.max(fromRect.height, toRect.height) * rowDelta,
+  };
+}
+
+function translateRect(rect, dx, dy) {
+  return {
+    ...rect,
+    left: rect.left + dx,
+    top: rect.top + dy,
+  };
+}
+
+function wrappedExitPathKeyframes(rects, baseOpacity = 1) {
+  const lastIndex = rects.length - 1;
+  return rects.map((rect, index) => {
+    const offset = lastIndex === 0 ? 1 : index / lastIndex;
+    const isLast = index === lastIndex;
+    return {
+      offset,
+      opacity: isLast ? 0 : baseOpacity * Math.max(0.18, 1 - offset * 0.58),
+      transform: transformFromOrigin(rects[0], rect, isLast ? 0.86 : 1.05),
+      filter: isLast
+        ? "blur(4px) saturate(0.7)"
+        : "drop-shadow(0 12px 13px rgba(108,73,210,0.36)) blur(0.4px)",
+    };
+  });
+}
+
+function wrappedEntryPathKeyframes(rects, finalRect, baseOpacity = 1) {
+  const startRect = rects[0];
+  const visibleRects = rects.slice(1);
+  if (visibleRects.length === 0) return wrappedEntryKeyframes(0, baseOpacity);
+
+  const keyframes = [
+    {
+      offset: 0,
+      opacity: 0,
+      transform: transformForRect(startRect, finalRect, 0.92),
+      filter: "blur(4px) saturate(0.72)",
+    },
+    {
+      offset: WRAP_ENTRY_REVEAL_OFFSET,
+      opacity: 0,
+      transform: transformForRect(startRect, finalRect, 0.92),
+      filter: "blur(4px) saturate(0.72)",
+    },
+  ];
+
+  const lastVisibleIndex = visibleRects.length - 1;
+  visibleRects.forEach((rect, index) => {
+    const progress = lastVisibleIndex === 0 ? 1 : index / lastVisibleIndex;
+    const offset =
+      WRAP_ENTRY_APPROACH_OFFSET +
+      (WRAP_ENTRY_STABLE_OFFSET - WRAP_ENTRY_APPROACH_OFFSET) * progress;
+    const isLast = index === lastVisibleIndex;
+    keyframes.push({
+      offset,
+      opacity: baseOpacity * (isLast ? 1 : 0.94),
+      transform: transformForRect(rect, finalRect, isLast ? 1 : 1.04),
+      filter: isLast
+        ? "drop-shadow(0 10px 10px rgba(0,0,0,0.32)) blur(0)"
+        : "drop-shadow(0 14px 13px rgba(108,73,210,0.45)) blur(0.5px)",
+    });
+  });
+  keyframes.push({
+    offset: 1,
+    opacity: baseOpacity,
+    transform: "translate(0, 0) scale(1)",
+    filter: "drop-shadow(0 0 0 rgba(0,0,0,0))",
+  });
+  return keyframes;
+}
+
+function wrappedExitKeyframes(distanceX, baseOpacity = 1) {
+  return [
+    {
+      offset: 0,
+      opacity: baseOpacity,
+      transform: "translate(0, 0) scale(1)",
+      filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48)) blur(0)",
+    },
+    {
+      offset: 0.54,
+      opacity: baseOpacity * 0.14,
+      transform: `translate(${distanceX}px, 0) scale(0.94)`,
+      filter: "drop-shadow(0 8px 14px rgba(108,73,210,0.42)) blur(1.8px)",
+    },
+    {
+      offset: 1,
+      opacity: 0,
+      transform: `translate(${distanceX}px, 0) scale(0.86)`,
+      filter: "blur(4px) saturate(0.7)",
+    },
+  ];
+}
+
+function wrappedEntryKeyframes(distanceX, baseOpacity = 1) {
+  return [
+    {
+      offset: 0,
+      opacity: 0,
+      transform: `translate(${distanceX}px, 0) scale(0.92)`,
+      filter: "blur(4px) saturate(0.72)",
+    },
+    {
+      offset: WRAP_ENTRY_REVEAL_OFFSET,
+      opacity: 0,
+      transform: `translate(${distanceX}px, 0) scale(0.92)`,
+      filter: "blur(4px) saturate(0.72)",
+    },
+    {
+      offset: WRAP_ENTRY_APPROACH_OFFSET,
+      opacity: baseOpacity * 0.94,
+      transform: `translate(${distanceX * 0.32}px, 0) scale(1.04)`,
+      filter: "drop-shadow(0 14px 13px rgba(108,73,210,0.45)) blur(0.5px)",
+    },
+    {
+      offset: WRAP_ENTRY_STABLE_OFFSET,
+      opacity: baseOpacity,
+      transform: "translate(0, 0) scale(1)",
+      filter: "drop-shadow(0 10px 10px rgba(0,0,0,0.32)) blur(0)",
+    },
+    {
+      offset: 1,
+      opacity: baseOpacity,
+      transform: "translate(0, 0) scale(1)",
       filter: "drop-shadow(0 0 0 rgba(0,0,0,0))",
     },
   ];
@@ -657,7 +1020,7 @@ function movementZIndexForAction(action, pieceId) {
 }
 
 function landingStatusDelayForAction(action) {
-  if (action?.mode === "knightRamp" && Array.isArray(action.rampSequence)) {
+  if (isRampAction(action)) {
     const hopCount = Math.max(1, action.rampSequence.length);
     const hopDuration = DOUBLE_RAMP_HOP_DURATION;
     if (hopCount > 1) return hopCount * hopDuration;
@@ -673,12 +1036,22 @@ function landingStatusDelayForAction(action) {
   );
 }
 
+function wrappedLandingCleanupDelay(action) {
+  return Math.round(moveAnimationDurationForAction(action) * WRAP_ENTRY_STABLE_OFFSET);
+}
+
 function setGhostContent(ghost, old) {
   if (old.html) {
     ghost.innerHTML = old.html;
     return;
   }
   ghost.textContent = old.textContent;
+}
+
+function pieceBaseOpacity(className) {
+  if (hasClass(className, "life-piece")) return 0.72;
+  if (hasClass(className, "death-piece")) return 0.7;
+  return 1;
 }
 
 function applyLandingClassName(pieceEl, finalClassName) {
@@ -816,13 +1189,13 @@ function removedMovingPieceKeyframes(fromRect, plan) {
     {
       offset: 0,
       opacity: 1,
-      transform: "translate(0px, 0px) scale(1.05)",
+      transform: "translate(0px, 0px) scale(1)",
       filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.48)) blur(0)",
     },
     {
       offset: beforeFadeOffset,
       opacity: 1,
-      transform: transformFromOrigin(fromRect, plan.fadeRect, 1.02),
+      transform: transformFromOrigin(fromRect, plan.fadeRect, 1),
       filter: "drop-shadow(0 14px 12px rgba(0,0,0,0.46)) blur(0)",
     },
     {
@@ -846,7 +1219,7 @@ function transformFromOrigin(fromRect, toRect, scale) {
 }
 
 function pathEventTime(action, square, pathIndex) {
-  if (action?.mode === "knightRamp" && Array.isArray(action.rampSequence)) {
+  if (isRampAction(action)) {
     const hopIndex = action.rampSequence.findIndex(
       (step) => squareKey(step.ramp) === squareKey(square),
     );
@@ -856,7 +1229,8 @@ function pathEventTime(action, square, pathIndex) {
           ? DOUBLE_RAMP_HOP_DURATION
           : MOVE_DURATION;
       return Math.round(
-        hopIndex * hopDuration + easedTimeForProgress(0.5, hopDuration),
+        (hopIndex * hopDuration + easedTimeForProgress(0.5, hopDuration)) *
+          (isWrappedAction(action) ? WRAP_MOVE_MULTIPLIER : 1),
       );
     }
   }
@@ -866,9 +1240,51 @@ function pathEventTime(action, square, pathIndex) {
   return Math.round(
     easedTimeForProgress(
       distanceProgress * NORMAL_MOVE_FINAL_OFFSET,
-      MOVE_DURATION,
+      moveAnimationDurationForAction(action),
     ),
   );
+}
+
+function isRampAction(action) {
+  return Array.isArray(action?.rampSequence) && action.rampSequence.length > 0;
+}
+
+function isWrappedAction(action) {
+  return Boolean(wrappedMoveDirection(action));
+}
+
+function wrappedMoveDirection(action) {
+  const route = actionRouteSquares(action);
+  for (let index = 1; index < route.length; index++) {
+    const dc = route[index].c - route[index - 1].c;
+    if (Math.abs(dc) > BOARD_SIZE / 2) return dc > 0 ? "left" : "right";
+  }
+  return null;
+}
+
+function actionRouteSquares(action = {}) {
+  const route = [];
+  pushRouteSquare(route, action.from);
+  if (Array.isArray(action.rampSequence) && action.rampSequence.length > 0) {
+    for (const step of action.rampSequence) {
+      pushRouteSquare(route, step.ramp);
+      pushRouteSquare(route, step.land);
+    }
+  } else {
+    for (const square of action.path ?? []) pushRouteSquare(route, square);
+  }
+  const destination = action.rest ?? action.staging ?? action.to;
+  pushRouteSquare(route, destination);
+  return route.filter(
+    (square) => Number.isFinite(square?.r) && Number.isFinite(square?.c),
+  );
+}
+
+function pushRouteSquare(route, square) {
+  if (!square) return;
+  const previous = route.at(-1);
+  if (previous?.r === square.r && previous?.c === square.c) return;
+  route.push(square);
 }
 
 function easedTimeForProgress(progress, duration) {

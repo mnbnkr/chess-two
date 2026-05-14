@@ -2,21 +2,28 @@ import { expect, test } from "bun:test";
 import {
   COLORS,
   FILES,
+  PAWN_BEHAVIORS,
   PIECE_TYPES,
+  VARIANT_IDS,
+  applyShieldOverrideToBoard,
   applyAction,
   canSkipSpecialMove,
   chooseAiAction,
   createEmptyState,
   createGameState,
   createPiece,
+  createStateFromFen,
   evaluateState,
   getActionsForPiece,
+  getVariant,
   generateLegalActions,
+  isLightSquareForState,
   isCheckmate,
   isKingInCheck,
   normalizeTurn,
   ownerOf,
   placePiece,
+  stateToFen,
   skipSpecialMove,
   updateIntimidation,
 } from "../src/engine/index.js";
@@ -58,6 +65,1817 @@ test("initial setup follows the RULES board and shield rules", () => {
 
 test("official file coordinates skip the letter i", () => {
   expect(FILES).toBe("abcdefghjk");
+});
+
+test("Chess Two keeps the stable variant id", () => {
+  const variant = getVariant(VARIANT_IDS.CHESS_TWO);
+
+  expect(variant.id).toBe("chess-two");
+  expect(variant.name).toBe("Chess Two");
+});
+
+test("Toad-Fool setup uses swapped corners, d-file Toads, and g-file Fools", () => {
+  const state = createGameState({ variantId: VARIANT_IDS.TOAD_FOOL });
+
+  expect(state.variantId).toBe(VARIANT_IDS.TOAD_FOOL);
+  expect(state.ruleOverrides).toEqual({
+    checkPattern: "inverted",
+    pawnBehavior: "frontalFan",
+    pawnInitialMaxStep: 2,
+    knightMovement: "orthodox",
+    shieldsEnabled: true,
+    frameEnabled: false,
+    wraparoundEnabled: false,
+    checkmateEnabled: true,
+  });
+  expect(state.board[0][0].type).toBe(PIECE_TYPES.LIFE);
+  expect(state.board[0][9].type).toBe(PIECE_TYPES.DEATH);
+  expect(state.board[9][0].type).toBe(PIECE_TYPES.DEATH);
+  expect(state.board[9][9].type).toBe(PIECE_TYPES.LIFE);
+  expect(isLightSquareForState(state, 0, 0)).toBe(true);
+  expect(isLightSquareForState(state, 9, 9)).toBe(true);
+  expect(state.board[1][3].type).toBe(PIECE_TYPES.TOAD);
+  expect(state.board[1][6].type).toBe(PIECE_TYPES.FOOL);
+  expect(state.board[8][3].type).toBe(PIECE_TYPES.TOAD);
+  expect(state.board[8][6].type).toBe(PIECE_TYPES.FOOL);
+  for (const color of [COLORS.WHITE, COLORS.BLACK]) {
+    const pieces = state.board.flat().filter((piece) => piece?.color === color);
+    expect(
+      pieces.filter((piece) => piece.type === PIECE_TYPES.BISHOP),
+    ).toHaveLength(1);
+    expect(
+      pieces.filter((piece) => piece.type === PIECE_TYPES.KNIGHT),
+    ).toHaveLength(1);
+  }
+  expect(
+    state.board[2].filter((piece) => piece?.type === PIECE_TYPES.PAWN),
+  ).toHaveLength(10);
+  expect(
+    state.board[7].filter((piece) => piece?.type === PIECE_TYPES.PAWN),
+  ).toHaveLength(10);
+  expect(stateToFen(state).split(" ")[0]).toBe(
+    "l8d/1rbtqkfnr1/pppppppppp/91/91/91/91/PPPPPPPPPP/1RNTQKFBR1/D8L",
+  );
+});
+
+test("Frame Chess uses the widened frame setup with frame defaults and removed edge pawns", () => {
+  const state = createGameState({ variantId: VARIANT_IDS.FRAME_CHESS });
+
+  expect(state.variantId).toBe(VARIANT_IDS.FRAME_CHESS);
+  expect(state.ruleOverrides).toEqual({
+    checkPattern: "standard",
+    pawnBehavior: PAWN_BEHAVIORS.FRONTAL_FAN,
+    pawnInitialMaxStep: 2,
+    knightMovement: "orthodox",
+    shieldsEnabled: true,
+    frameEnabled: true,
+    wraparoundEnabled: true,
+    checkmateEnabled: true,
+  });
+  expect(state.board[2][0]).toBeNull();
+  expect(state.board[2][9]).toBeNull();
+  expect(state.board[7][0]).toBeNull();
+  expect(state.board[7][9]).toBeNull();
+  expect(
+    state.board[2].filter((piece) => piece?.type === PIECE_TYPES.PAWN),
+  ).toHaveLength(8);
+  expect(
+    state.board[7].filter((piece) => piece?.type === PIECE_TYPES.PAWN),
+  ).toHaveLength(8);
+  expect(state.board[0][0].type).toBe(PIECE_TYPES.DEATH);
+  expect(state.board[0][9].type).toBe(PIECE_TYPES.LIFE);
+  expect(state.board[9][0].type).toBe(PIECE_TYPES.LIFE);
+  expect(state.board[9][9].type).toBe(PIECE_TYPES.DEATH);
+  expect(isLightSquareForState(state, 0, 0)).toBe(false);
+  expect(isLightSquareForState(state, 0, 9)).toBe(true);
+  expect(isLightSquareForState(state, 9, 0)).toBe(true);
+  expect(isLightSquareForState(state, 9, 9)).toBe(false);
+  expect(state.board[1][3].id).toBe("frame-black-bishop-3");
+  expect(state.board[1][6].id).toBe("frame-black-knight-6");
+  expect(state.board[8][3].id).toBe("frame-white-knight-3");
+  expect(state.board[8][6].id).toBe("frame-white-bishop-6");
+  expect(stateToFen(state).split(" ")[0]).toBe(
+    "d3qk3l/2rbtfnr2/1pppppppp1/91/91/91/91/1PPPPPPPP1/2RNTFBR2/L3QK3D",
+  );
+});
+
+test("Frame Chess w/o LD uses the old Frame layout without Life or Death", () => {
+  const state = createGameState({
+    variantId: VARIANT_IDS.FRAME_CHESS_WITHOUT_LD,
+  });
+
+  expect(state.variantId).toBe(VARIANT_IDS.FRAME_CHESS_WITHOUT_LD);
+  expect(state.ruleOverrides).toEqual({
+    checkPattern: "inverted",
+    pawnBehavior: PAWN_BEHAVIORS.FRONTAL_FAN,
+    pawnInitialMaxStep: 2,
+    knightMovement: "orthodox",
+    shieldsEnabled: true,
+    frameEnabled: true,
+    wraparoundEnabled: true,
+    checkmateEnabled: true,
+  });
+  expect(
+    state.board
+      .flat()
+      .some(
+        (piece) =>
+          piece?.type === PIECE_TYPES.LIFE || piece?.type === PIECE_TYPES.DEATH,
+      ),
+  ).toBe(false);
+  expect(stateToFen(state).split(" ")[0]).toBe(
+    "91/1rbtqkfnr1/1pppppppp1/91/91/91/91/1PPPPPPPP1/1RNTQKFBR1/91",
+  );
+});
+
+test("legacy forwardFan override normalizes to Frontal Fan", () => {
+  const state = createGameState({
+    variantId: VARIANT_IDS.TOAD_FOOL,
+    overrides: { pawnBehavior: "forwardFan" },
+  });
+
+  expect(state.ruleOverrides.pawnBehavior).toBe("frontalFan");
+});
+
+test("Toad-Fool Classic setup uses normalized 10x10 FEN and standard checks", () => {
+  const state = createGameState({ variantId: VARIANT_IDS.TOAD_FOOL_CLASSIC });
+
+  expect(state.variantId).toBe(VARIANT_IDS.TOAD_FOOL_CLASSIC);
+  expect(state.ruleOverrides).toEqual({
+    checkPattern: "standard",
+    pawnBehavior: "frontalFan",
+    pawnInitialMaxStep: 2,
+    knightMovement: "orthodox",
+    shieldsEnabled: true,
+    frameEnabled: false,
+    wraparoundEnabled: false,
+    checkmateEnabled: true,
+  });
+  expect(isLightSquareForState(state, 0, 0)).toBe(false);
+  expect(isLightSquareForState(state, 0, 9)).toBe(true);
+  expect(isLightSquareForState(state, 9, 0)).toBe(true);
+  expect(isLightSquareForState(state, 9, 9)).toBe(false);
+  expect(state.board[0].map((piece) => piece?.type)).toEqual([
+    PIECE_TYPES.DEATH,
+    PIECE_TYPES.ROOK,
+    PIECE_TYPES.BISHOP,
+    PIECE_TYPES.TOAD,
+    PIECE_TYPES.QUEEN,
+    PIECE_TYPES.KING,
+    PIECE_TYPES.FOOL,
+    PIECE_TYPES.KNIGHT,
+    PIECE_TYPES.ROOK,
+    PIECE_TYPES.LIFE,
+  ]);
+  expect(state.board[9].map((piece) => piece?.type)).toEqual([
+    PIECE_TYPES.LIFE,
+    PIECE_TYPES.ROOK,
+    PIECE_TYPES.KNIGHT,
+    PIECE_TYPES.TOAD,
+    PIECE_TYPES.QUEEN,
+    PIECE_TYPES.KING,
+    PIECE_TYPES.FOOL,
+    PIECE_TYPES.BISHOP,
+    PIECE_TYPES.ROOK,
+    PIECE_TYPES.DEATH,
+  ]);
+  expect(stateToFen(state).split(" ")[0]).toBe(
+    "drbtqkfnrl/pppppppppp/91/91/91/91/91/91/PPPPPPPPPP/LRNTQKFBRD",
+  );
+});
+
+test("Toad-Fool FEN import accepts the corrected g-file Fool setup", () => {
+  const state = createStateFromFen(
+    "91/1rbtqkfnr1/pppppppppp/91/91/91/91/PPPPPPPPPP/1RNTQKFBR1/91 w - - 0 1",
+    { variantId: VARIANT_IDS.TOAD_FOOL },
+  );
+
+  expect(state.board[1][3].type).toBe(PIECE_TYPES.TOAD);
+  expect(state.board[1][6].type).toBe(PIECE_TYPES.FOOL);
+  expect(state.board[8][3].type).toBe(PIECE_TYPES.TOAD);
+  expect(state.board[8][6].type).toBe(PIECE_TYPES.FOOL);
+  expect(stateToFen(state).split(" ")[0]).toBe(
+    "91/1rbtqkfnr1/pppppppppp/91/91/91/91/PPPPPPPPPP/1RNTQKFBR1/91",
+  );
+});
+
+test("FEN import preserves stable setup ids for piece orientation", () => {
+  const chessTwo = createGameState({ variantId: VARIANT_IDS.CHESS_TWO });
+  const importedChessTwo = createStateFromFen(stateToFen(chessTwo), {
+    variantId: VARIANT_IDS.CHESS_TWO,
+  });
+  expect(importedChessTwo.board[0][2].id).toBe("black-knight-2");
+  expect(importedChessTwo.board[0][3].id).toBe("black-bishop-3");
+  expect(importedChessTwo.board[9][2].id).toBe("white-knight-2");
+  expect(importedChessTwo.board[9][3].id).toBe("white-bishop-3");
+
+  const classic = createGameState({
+    variantId: VARIANT_IDS.TOAD_FOOL_CLASSIC,
+  });
+  const importedClassic = createStateFromFen(stateToFen(classic), {
+    variantId: VARIANT_IDS.TOAD_FOOL_CLASSIC,
+  });
+  expect(importedClassic.board[9][2].id).toBe("classic-white-knight-2");
+});
+
+test("FEN import can preserve current ids for moved pieces", () => {
+  const state = createGameState({ variantId: VARIANT_IDS.CHESS_TWO });
+  const knight = state.board[9][2];
+  state.board[9][2] = null;
+  knight.row = 5;
+  knight.col = 5;
+  state.board[5][5] = knight;
+
+  const imported = createStateFromFen(stateToFen(state), {
+    variantId: VARIANT_IDS.CHESS_TWO,
+    referenceState: state,
+  });
+
+  expect(imported.board[5][5].id).toBe("white-knight-2");
+
+  const sparseReference = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.CHESS_TWO,
+  });
+  placePiece(
+    sparseReference.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, {
+      id: "white-knight-2",
+    }),
+  );
+  const duplicateSetupImport = createStateFromFen(
+    "91/91/91/91/91/5N4/91/91/91/2N7 w - - 0 1",
+    {
+      variantId: VARIANT_IDS.CHESS_TWO,
+      referenceState: sparseReference,
+    },
+  );
+  const ids = duplicateSetupImport.board
+    .flat()
+    .flatMap((piece) => (piece ? [piece.id] : []));
+  expect(duplicateSetupImport.board[5][5].id).toBe("white-knight-2");
+  expect(duplicateSetupImport.board[9][2].id).not.toBe("white-knight-2");
+  expect(new Set(ids).size).toBe(ids.length);
+});
+
+test("Toad steps, ramp moves, and King-style attacks are separate in Toad-Fool", () => {
+  const state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 5, 5, { id: "toad" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 5, 6, { id: "ramp" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 4, 4, { id: "target" }),
+  );
+
+  const actions = generateLegalActions(state);
+  expect(
+    actions.some(
+      (action) =>
+        action.mode === "toadRamp" && action.to.r === 5 && action.to.c === 7,
+    ),
+  ).toBe(true);
+  expect(
+    actions.some(
+      (action) =>
+        action.mode === "toadStep" && action.to.r === 4 && action.to.c === 5,
+    ),
+  ).toBe(true);
+  expect(
+    actions.some(
+      (action) => action.mode === "toadAttack" && action.targetId === "target",
+    ),
+  ).toBe(true);
+  expect(actions.some((action) => action.mode === "kingStep")).toBe(false);
+});
+
+test("Toad-Fool Knights move orthogonally by chess L-shapes but keep staged L-attacks", () => {
+  const state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: "knight" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 4, { id: "target" }),
+  );
+
+  const actions = generateLegalActions(state);
+  expect(actions.some((action) => action.mode === "knightRamp")).toBe(false);
+  expect(
+    actions.some(
+      (action) =>
+        action.mode === "knightMove" && action.to.r === 3 && action.to.c === 6,
+    ),
+  ).toBe(true);
+  expect(
+    actions.some(
+      (action) =>
+        action.mode === "knightAttack" && action.targetId === "target",
+    ),
+  ).toBe(true);
+});
+
+test("orthodox Knight L-moves apply Life and Death pass-through effects", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 2, {
+      id: "life-knight",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 4, 2, { id: "life" }),
+  );
+
+  let knightMove = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightMove" &&
+      action.to.r === 3 &&
+      action.to.c === 3,
+  );
+  expect(knightMove.path.map((square) => `${square.r},${square.c}`)).toEqual([
+    "4,2",
+    "4,3",
+  ]);
+  state = applyAction(state, knightMove);
+
+  expect(state.board[3][3]?.id).toBe("life-knight");
+  expect(state.board[3][3].hasShield).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 2, {
+      id: "death-shielded-knight",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 3, { id: "death" }),
+  );
+
+  knightMove = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightMove" &&
+      action.to.r === 3 &&
+      action.to.c === 3,
+  );
+  expect(knightMove.path.map((square) => `${square.r},${square.c}`)).toEqual([
+    "4,2",
+    "4,3",
+  ]);
+  state = applyAction(state, knightMove);
+
+  expect(state.board[3][3]?.id).toBe("death-shielded-knight");
+  expect(state.board[3][3].hasShield).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 2, {
+      id: "death-bare-knight",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 3, { id: "death" }),
+  );
+
+  knightMove = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightMove" &&
+      action.to.r === 3 &&
+      action.to.c === 3,
+  );
+  state = applyAction(state, knightMove);
+
+  expect(state.board[4][3]?.id).toBe("death");
+  expect(
+    state.board.flat().some((piece) => piece?.id === "death-bare-knight"),
+  ).toBe(false);
+});
+
+test("Toad ramp hops strip shields from jumped enemy pieces", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 5, 5, { id: "toad" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 5, 6, { id: "enemy-ramp" }),
+  );
+
+  const hop = actionMatching(
+    state,
+    (action) =>
+      action.mode === "toadRamp" &&
+      action.to.r === 5 &&
+      action.to.c === 7 &&
+      action.shieldStrips?.[0]?.pieceId === "enemy-ramp",
+  );
+  state = applyAction(state, hop);
+
+  expect(state.board[5][7]?.id).toBe("toad");
+  expect(state.board[5][6]?.id).toBe("enemy-ramp");
+  expect(state.board[5][6].hasShield).toBe(false);
+});
+
+test("Knight, Toad step, and ramp moves can self-destruct on Death", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 5, { id: "knight" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 3, 6, { id: "death" }),
+  );
+
+  const knightDeath = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightMove" &&
+      action.deathLanding &&
+      action.to.r === 3 &&
+      action.to.c === 6,
+  );
+  state = applyAction(state, knightDeath);
+  expect(state.board[3][6]?.id).toBe("death");
+  expect(state.board.flat().some((piece) => piece?.id === "knight")).toBe(
+    false,
+  );
+
+  state = createEmptyState(COLORS.WHITE, { variantId: VARIANT_IDS.TOAD_FOOL });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 5, 5, { id: "toad-step" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 4, { id: "step-death" }),
+  );
+  const toadStepDeath = actionMatching(
+    state,
+    (action) => action.mode === "toadStep" && action.deathLanding,
+  );
+  state = applyAction(state, toadStepDeath);
+  expect(state.board[4][4]?.id).toBe("step-death");
+  expect(state.board.flat().some((piece) => piece?.id === "toad-step")).toBe(
+    false,
+  );
+
+  state = createEmptyState(COLORS.WHITE, { variantId: VARIANT_IDS.TOAD_FOOL });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 5, 5, { id: "toad-ramp" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 5, 6, { id: "ramp" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 5, 7, { id: "ramp-death" }),
+  );
+  const toadRampDeath = actionMatching(
+    state,
+    (action) => action.mode === "toadRamp" && action.deathLanding,
+  );
+  state = applyAction(state, toadRampDeath);
+  expect(state.board[5][7]?.id).toBe("ramp-death");
+  expect(state.board.flat().some((piece) => piece?.id === "toad-ramp")).toBe(
+    false,
+  );
+});
+
+test("Fools copy the last enemy standard profile without copying shield state", () => {
+  const state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  const fool = placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.WHITE, 5, 5, {
+      id: "white-fool",
+      hasShield: true,
+    }),
+  );
+  state.foolMemory[COLORS.BLACK] = { type: PIECE_TYPES.PAWN };
+
+  const actions = getActionsForPiece(state, fool.id);
+  expect(
+    actions.some(
+      (action) =>
+        action.pieceType === PIECE_TYPES.FOOL &&
+        action.profileType === PIECE_TYPES.PAWN &&
+        action.mode === "pawnAdvance" &&
+        action.to.r === 4,
+    ),
+  ).toBe(true);
+  expect(fool.hasShield).toBe(true);
+});
+
+test("Fools copy the profile imitated by an enemy Fool, including Toad", () => {
+  let state = createEmptyState(COLORS.BLACK, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.BLACK, 5, 5, { id: "black-fool" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.WHITE, 2, 2, { id: "white-fool" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 5, 6, { id: "black-ramp" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 2, 3, { id: "white-ramp" }),
+  );
+  state.foolMemory[COLORS.WHITE] = { type: PIECE_TYPES.TOAD };
+
+  const blackFoolMove = actionMatching(
+    state,
+    (action) => action.pieceId === "black-fool" && action.mode === "toadRamp",
+  );
+  state = applyAction(state, blackFoolMove);
+  expect(state.foolMemory[COLORS.BLACK]).toEqual({ type: PIECE_TYPES.TOAD });
+
+  state.currentPlayer = COLORS.WHITE;
+  state.turn = { standardMoveMade: false, specialMoveMade: false };
+  const whiteFoolActions = getActionsForPiece(state, "white-fool");
+  expect(
+    whiteFoolActions.some(
+      (action) =>
+        action.mode === "toadRamp" && action.profileType === PIECE_TYPES.TOAD,
+    ),
+  ).toBe(true);
+});
+
+test("Frontal Fan pawns use orthodox attacks while Frontal Fan 2 preserves lane recoil", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 7, 4, { id: "white-pawn" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 6, 5, { id: "target" }),
+  );
+
+  const shieldBreak = actionMatching(
+    state,
+    (action) => action.mode === "pawnAttack" && action.targetId === "target",
+  );
+  state = applyAction(state, shieldBreak);
+  expect(state.board[6][5]?.id).toBe("target");
+  expect(state.board[6][5].hasShield).toBe(false);
+  expect(state.board[7][4]?.id).toBe("white-pawn");
+  expect(state.board[7][4].hasShield).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+    overrides: { pawnBehavior: PAWN_BEHAVIORS.FRONTAL_FAN_2 },
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 7, 4, { id: "white-pawn" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 5, 5, { id: "target" }),
+  );
+
+  const legacyShieldBreak = actionMatching(
+    state,
+    (action) => action.mode === "pawnAttack" && action.targetId === "target",
+  );
+  state = applyAction(state, legacyShieldBreak);
+  expect(state.board[5][5]?.id).toBe("target");
+  expect(state.board[5][5].hasShield).toBe(false);
+  expect(state.board[6][5]?.id).toBe("white-pawn");
+  expect(state.board[6][5].hasShield).toBe(false);
+});
+
+test("Frontal Fan movement is compact and rank-smart", () => {
+  const toadFool = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    toadFool.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 7, 4, { id: "toad-pawn" }),
+  );
+  const compactMoves = generateLegalActions(toadFool)
+    .filter(
+      (action) =>
+        action.pieceId === "toad-pawn" && action.mode === "pawnAdvance",
+    )
+    .map((action) => `${action.to.r},${action.to.c}`)
+    .sort();
+
+  expect(compactMoves).toEqual(["5,3", "5,4", "5,5", "6,3", "6,4", "6,5"]);
+
+  const classicRange = createGameState({
+    variantId: VARIANT_IDS.CHESS_TWO,
+    overrides: { pawnBehavior: "frontalFan" },
+  });
+  const firstMoveSquares = generateLegalActions(classicRange)
+    .filter(
+      (action) =>
+        action.pieceId === "white-pawn-4" && action.mode === "pawnAdvance",
+    )
+    .map((action) => `${action.to.r},${action.to.c}`)
+    .sort();
+
+  expect(firstMoveSquares).toEqual([
+    "5,3",
+    "5,4",
+    "5,5",
+    "6,3",
+    "6,4",
+    "6,5",
+    "7,3",
+    "7,4",
+    "7,5",
+  ]);
+});
+
+test("Frontal Fan pawns cannot make first diagonal leaps over a standard forward blocker", () => {
+  const state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 7, 4, { id: "pawn" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 6, 4, {
+      id: "forward-blocker",
+    }),
+  );
+
+  const moves = generateLegalActions(state)
+    .filter((action) => action.pieceId === "pawn" && action.kind === "move")
+    .map((action) => `${action.to.r},${action.to.c}`)
+    .sort();
+
+  expect(moves).toEqual(["6,3", "6,5"]);
+});
+
+test("Frontal Fan pawns do not use the Chess Two Life/Death pawn jump", () => {
+  const state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 7, 4, { id: "toad-pawn" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 6, 4, { id: "life-blocker" }),
+  );
+
+  const actions = generateLegalActions(state).filter(
+    (action) => action.pieceId === "toad-pawn",
+  );
+  expect(actions.some((action) => action.mode === "pawnLifeDeathJump")).toBe(
+    false,
+  );
+  expect(
+    actions.some(
+      (action) =>
+        action.mode === "pawnAdvance" && action.to.r === 5 && action.to.c === 4,
+    ),
+  ).toBe(false);
+});
+
+test("pawn initial max override applies to Chess Two and Frontal Fan pawns", () => {
+  const chessTwoMaxTwo = createGameState({
+    overrides: { pawnInitialMaxStep: 2 },
+  });
+  const chessTwoMoves = generateLegalActions(chessTwoMaxTwo)
+    .filter(
+      (action) =>
+        action.pieceId === "white-pawn-4" && action.mode === "pawnAdvance",
+    )
+    .map((action) => `${action.to.r},${action.to.c}`)
+    .sort();
+  expect(chessTwoMoves).toEqual(["6,4", "7,4"]);
+
+  const frontalFanMaxThree = createGameState({
+    variantId: VARIANT_IDS.TOAD_FOOL_CLASSIC,
+    overrides: { pawnInitialMaxStep: 3 },
+  });
+  const fanMoves = generateLegalActions(frontalFanMaxThree)
+    .filter(
+      (action) =>
+        action.pieceId === "classic-white-pawn-4" &&
+        action.mode === "pawnAdvance",
+    )
+    .map((action) => `${action.to.r},${action.to.c}`)
+    .sort();
+  expect(fanMoves).toEqual([
+    "5,3",
+    "5,4",
+    "5,5",
+    "6,3",
+    "6,4",
+    "6,5",
+    "7,3",
+    "7,4",
+    "7,5",
+  ]);
+
+  const classicDefault = createGameState({
+    variantId: VARIANT_IDS.TOAD_FOOL_CLASSIC,
+  });
+  const classicMoves = generateLegalActions(classicDefault)
+    .filter(
+      (action) =>
+        action.pieceId === "classic-white-pawn-4" &&
+        action.mode === "pawnAdvance",
+    )
+    .map((action) => `${action.to.r},${action.to.c}`)
+    .sort();
+  expect(classicMoves).toEqual(["6,3", "6,4", "6,5", "7,3", "7,4", "7,5"]);
+});
+
+test("shieldless override blocks default shields, Life repair, and Life pass-through", () => {
+  const initial = createGameState({ overrides: { shieldsEnabled: false } });
+  expect(initial.board.flat().filter((piece) => piece?.hasShield)).toHaveLength(
+    0,
+  );
+
+  let healState = createEmptyState(COLORS.WHITE);
+  placePiece(
+    healState.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 5, 4, { id: "life" }),
+  );
+  placePiece(
+    healState.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 5, {
+      id: "pawn",
+      hasShield: false,
+    }),
+  );
+  const staleHeal = actionMatching(
+    healState,
+    (action) => action.mode === "heal" && action.targetId === "pawn",
+  );
+  healState.ruleOverrides = {
+    ...healState.ruleOverrides,
+    shieldsEnabled: false,
+  };
+  expect(
+    generateLegalActions(healState).some(
+      (action) => action.mode === "heal" && action.targetId === "pawn",
+    ),
+  ).toBe(false);
+  healState = applyAction(healState, staleHeal);
+  expect(healState.board[4][5].hasShield).toBe(false);
+
+  let passState = createEmptyState(COLORS.WHITE, {
+    overrides: { shieldsEnabled: false },
+  });
+  placePiece(
+    passState.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 6, 4, {
+      id: "runner",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    passState.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 5, 4, { id: "pass-life" }),
+  );
+  const passThrough = actionMatching(
+    passState,
+    (action) =>
+      action.pieceId === "runner" &&
+      action.mode === "pawnAdvance" &&
+      action.to.r === 4 &&
+      action.to.c === 4,
+  );
+  passState = applyAction(passState, passThrough);
+  expect(passState.board[4][4].hasShield).toBe(false);
+});
+
+test("restoring shields leaves active intimidated checkers unshielded", () => {
+  const state = createEmptyState(COLORS.WHITE);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 0, { id: "black-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 9, { id: "white-king" }),
+  );
+  const checker = placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 0, 5, { id: "checker" }),
+  );
+  updateIntimidation(state);
+  expect(checker.isIntimidated).toBe(true);
+  expect(checker.hasShield).toBe(false);
+
+  state.ruleOverrides = { ...state.ruleOverrides, shieldsEnabled: false };
+  applyShieldOverrideToBoard(state);
+  state.ruleOverrides = { ...state.ruleOverrides, shieldsEnabled: true };
+  applyShieldOverrideToBoard(state, { restoreEligible: true });
+
+  expect(checker.hasShield).toBe(false);
+  expect(checker.intimidationSuppressedShield).toBe(true);
+});
+
+test("Frame Chess suppresses edge shields, restores them inside, and stores frame heals latently", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 0, 4, { id: "rook" }),
+  );
+  applyShieldOverrideToBoard(state);
+
+  expect(state.board[0][4].hasShield).toBe(false);
+  expect(state.board[0][4].frameSuppressedShield).toBe(true);
+
+  const leaveFrame = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "rook" &&
+      action.mode === "slide" &&
+      action.to.r === 1 &&
+      action.to.c === 4,
+  );
+  state = applyAction(state, leaveFrame);
+  expect(state.board[1][4].hasShield).toBe(true);
+  expect(state.board[1][4].frameSuppressedShield).toBe(false);
+
+  state = createEmptyState(COLORS.BLACK, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.BLACK, 1, 2, { id: "life" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 3, {
+      id: "frame-pawn",
+      hasShield: false,
+    }),
+  );
+
+  const heal = actionMatching(
+    state,
+    (action) => action.mode === "heal" && action.targetId === "frame-pawn",
+  );
+  expect(heal.target.frameSuppressedShield).toBe(true);
+  state = applyAction(state, heal);
+  expect(state.board[0][3].hasShield).toBe(false);
+  expect(state.board[0][3].frameSuppressedShield).toBe(true);
+  expect(state.board[0][3].isImmune).toBe(true);
+
+  state.ruleOverrides = { ...state.ruleOverrides, shieldsEnabled: false };
+  applyShieldOverrideToBoard(state);
+  expect(state.board[0][3].hasShield).toBe(false);
+  expect(state.board[0][3].frameSuppressedShield).toBe(false);
+});
+
+test("Frame Chess blocks non-King frame attacks while preserving King and Life/Death exceptions", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 0, 4, { id: "edge-rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 6, {
+      id: "edge-target",
+      hasShield: false,
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.pieceId === "edge-rook" && action.targetId === "edge-target",
+    ),
+  ).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 2, 4, { id: "inside-rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 4, {
+      id: "frame-target",
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(state.board[0][4].hasShield).toBe(false);
+  expect(state.board[0][4].frameSuppressedShield).toBe(true);
+
+  const frameCapture = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "inside-rook" &&
+      action.targetId === "frame-target",
+  );
+  state = applyAction(state, frameCapture);
+  expect(
+    state.board.flat().some((piece) => piece?.id === "frame-target"),
+  ).toBe(false);
+  expect(state.board[0][4]?.id).toBe("inside-rook");
+  expect(state.board[0][4].frameSuppressedShield).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 2, 4, {
+      id: "inside-knight",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 5, {
+      id: "knight-frame-target",
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(state.board[0][5].hasShield).toBe(false);
+  expect(state.board[0][5].frameSuppressedShield).toBe(true);
+
+  const knightFrameCapture = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightAttack" &&
+      action.pieceId === "inside-knight" &&
+      action.targetId === "knight-frame-target",
+  );
+  expect(knightFrameCapture.path).toEqual([
+    { r: 1, c: 4 },
+    { r: 1, c: 5 },
+  ]);
+  state = applyAction(state, knightFrameCapture);
+  expect(
+    state.board.flat().some((piece) => piece?.id === "knight-frame-target"),
+  ).toBe(false);
+  expect(state.board[0][5]?.id).toBe("inside-knight");
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 0, 4, { id: "king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 5, {
+      id: "king-target",
+      hasShield: false,
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.mode === "kingAttack" && action.targetId === "king-target",
+    ),
+  ).toBe(true);
+
+  state = createEmptyState(COLORS.BLACK, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 0, 4, { id: "death" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 1, 5, {
+      id: "death-target",
+      hasShield: false,
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) => action.mode === "kill" && action.targetId === "death-target",
+    ),
+  ).toBe(true);
+});
+
+test("Frame Chess allows non-King interior attacks to target the frame only as the target square", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 1, 4, { id: "toad" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 5, {
+      id: "toad-frame-target",
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.mode === "toadAttack" &&
+        action.pieceId === "toad" &&
+        action.targetId === "toad-frame-target",
+    ),
+  ).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 1, 4, { id: "pawn" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 5, {
+      id: "pawn-frame-target",
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.mode === "pawnAttack" &&
+        action.pieceId === "pawn" &&
+        action.targetId === "pawn-frame-target",
+    ),
+  ).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  state.foolMemory[COLORS.BLACK] = { type: PIECE_TYPES.KNIGHT };
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.WHITE, 2, 4, { id: "fool" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 5, {
+      id: "fool-frame-target",
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.mode === "knightAttack" &&
+        action.pieceId === "fool" &&
+        action.targetId === "fool-frame-target",
+    ),
+  ).toBe(true);
+});
+
+test("Frame Chess lets adjacent Knights attack frame targets through frame bend squares", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 1, 2, {
+      id: "rank-adjacent-knight",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 0, {
+      id: "rank-frame-target",
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+
+  let attack = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightAttack" &&
+      action.pieceId === "rank-adjacent-knight" &&
+      action.targetId === "rank-frame-target",
+  );
+  expect(attack.path).toEqual([
+    { r: 1, c: 1 },
+    { r: 0, c: 1 },
+  ]);
+  state = applyAction(state, attack);
+  expect(
+    state.board.flat().some((piece) => piece?.id === "rank-frame-target"),
+  ).toBe(false);
+  expect(state.board[0][0]?.id).toBe("rank-adjacent-knight");
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 4, 1, {
+      id: "file-adjacent-knight",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 2, 0, {
+      id: "file-frame-target",
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+
+  attack = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightAttack" &&
+      action.pieceId === "file-adjacent-knight" &&
+      action.targetId === "file-frame-target",
+  );
+  expect(attack.path).toEqual([
+    { r: 3, c: 1 },
+    { r: 3, c: 0 },
+  ]);
+  state = applyAction(state, attack);
+  expect(
+    state.board.flat().some((piece) => piece?.id === "file-frame-target"),
+  ).toBe(false);
+  expect(state.board[2][0]?.id).toBe("file-adjacent-knight");
+});
+
+test("Frame Chess wrap does not passively annihilate corner Life and Death pieces", () => {
+  let state = createGameState({ variantId: VARIANT_IDS.FRAME_CHESS });
+  const move = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "frame-white-pawn-1" &&
+      action.mode === "pawnAdvance" &&
+      action.to.r === 6 &&
+      action.to.c === 1,
+  );
+
+  state = applyAction(state, move);
+
+  expect(state.board[0][0]?.type).toBe(PIECE_TYPES.DEATH);
+  expect(state.board[0][9]?.type).toBe(PIECE_TYPES.LIFE);
+  expect(state.board[9][0]?.type).toBe(PIECE_TYPES.LIFE);
+  expect(state.board[9][9]?.type).toBe(PIECE_TYPES.DEATH);
+});
+
+test("Wrap-around movement works for non-King standard, Toad/Fool, Pawn, and Life/Death profiles", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 4, 1, { id: "rook" }),
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "rook" &&
+      action.mode === "slide" &&
+      action.to.r === 4 &&
+      action.to.c === 9 &&
+      action.path.some((square) => square.r === 4 && square.c === 0),
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 4, 0, { id: "king" }),
+  );
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.pieceId === "king" &&
+        action.mode === "kingStep" &&
+        action.to.r === 4 &&
+        action.to.c === 9,
+    ),
+  ).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 4, 0, { id: "knight" }),
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "knight" &&
+      action.mode === "knightMove" &&
+      action.to.r === 3 &&
+      action.to.c === 8,
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 4, 0, {
+      id: "wrapped-life-knight",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 4, 9, { id: "wrapped-life" }),
+  );
+  const wrappedKnightMove = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "wrapped-life-knight" &&
+      action.mode === "knightMove" &&
+      action.to.r === 3 &&
+      action.to.c === 8,
+  );
+  expect(
+    wrappedKnightMove.path.map((square) => `${square.r},${square.c}`),
+  ).toEqual(["4,9", "3,9"]);
+  state = applyAction(state, wrappedKnightMove);
+  expect(state.board[3][8]?.id).toBe("wrapped-life-knight");
+  expect(state.board[3][8].hasShield).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 7, 0, { id: "pawn" }),
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "pawn" &&
+      action.mode === "pawnAdvance" &&
+      action.to.r === 6 &&
+      action.to.c === 9,
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 4, 0, { id: "toad" }),
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "toad" &&
+      action.mode === "toadStep" &&
+      action.to.r === 4 &&
+      action.to.c === 9,
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 4, 1, { id: "toad" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 0, { id: "ramp" }),
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "toad" &&
+      action.mode === "toadRamp" &&
+      action.to.r === 4 &&
+      action.to.c === 9 &&
+      action.path.some((square) => square.r === 4 && square.c === 0),
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.WHITE, 4, 0, { id: "fool" }),
+  );
+  state.foolMemory[COLORS.BLACK] = { type: PIECE_TYPES.TOAD };
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "fool" &&
+      action.mode === "toadStep" &&
+      action.profileType === PIECE_TYPES.TOAD &&
+      action.to.r === 4 &&
+      action.to.c === 9,
+  );
+
+  state = createEmptyState(COLORS.BLACK, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.BLACK, 4, 9, { id: "life" }),
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "life" &&
+      action.mode === "lifeDeathMove" &&
+      action.to.r === 5 &&
+      action.to.c === 0,
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 5, 9, { id: "death" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 4, 0, {
+      id: "death-target",
+      hasShield: false,
+    }),
+  );
+  expect(
+    generateLegalActions(state).some(
+      (action) => action.mode === "kill" && action.targetId === "death-target",
+    ),
+  ).toBe(false);
+});
+
+test("Frame wrap-around does not create attacks across opposite files", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 4, 1, { id: "rook" }),
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "rook" &&
+      action.mode === "slide" &&
+      action.to.r === 4 &&
+      action.to.c === 9,
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 4, 1, { id: "rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 2, { id: "blocker" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 4, 9, {
+      id: "target",
+      hasShield: false,
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) => action.pieceId === "rook" && action.targetId === "target",
+    ),
+  ).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 1, 8, { id: "knight" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 0, {
+      id: "knight-target",
+      hasShield: false,
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.mode === "knightAttack" &&
+        action.pieceId === "knight" &&
+        action.targetId === "knight-target",
+    ),
+  ).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.TOAD, COLORS.WHITE, 1, 9, { id: "toad" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 0, {
+      id: "toad-target",
+      hasShield: false,
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.mode === "toadAttack" &&
+        action.pieceId === "toad" &&
+        action.targetId === "toad-target",
+    ),
+  ).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 1, 9, { id: "pawn" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 0, {
+      id: "pawn-target",
+      hasShield: false,
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.mode === "pawnAttack" &&
+        action.pieceId === "pawn" &&
+        action.targetId === "pawn-target",
+    ),
+  ).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  state.foolMemory[COLORS.BLACK] = { type: PIECE_TYPES.KNIGHT };
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.FOOL, COLORS.WHITE, 1, 8, { id: "fool" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 0, 0, {
+      id: "fool-target",
+      hasShield: false,
+    }),
+  );
+  applyShieldOverrideToBoard(state);
+  expect(
+    generateLegalActions(state).some(
+      (action) =>
+        action.mode === "knightAttack" &&
+        action.pieceId === "fool" &&
+        action.targetId === "fool-target",
+    ),
+  ).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.WHITE, 5, 9, { id: "death" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 4, 0, {
+      id: "death-target",
+      hasShield: false,
+    }),
+  );
+  expect(
+    generateLegalActions(state).some(
+      (action) => action.mode === "kill" && action.targetId === "death-target",
+    ),
+  ).toBe(false);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 6, 9, { id: "life" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 5, 0, {
+      id: "life-target",
+      hasShield: false,
+    }),
+  );
+  expect(
+    generateLegalActions(state).some(
+      (action) => action.mode === "heal" && action.targetId === "life-target",
+    ),
+  ).toBe(false);
+});
+
+test("wrapped orthogonal moves prefer Life routes, avoid Death routes, then use the shortest path", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 4, 1, { id: "rook" }),
+  );
+  let preferred = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "rook" &&
+      action.mode === "slide" &&
+      action.to.r === 4 &&
+      action.to.c === 9,
+  );
+  expect(preferred.path.map((square) => `${square.r},${square.c}`)).toEqual([
+    "4,0",
+  ]);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 4, 1, { id: "rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 4, 4, { id: "life" }),
+  );
+  preferred = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "rook" &&
+      action.mode === "slide" &&
+      action.to.r === 4 &&
+      action.to.c === 9,
+  );
+  expect(preferred.path.some((square) => square.r === 4 && square.c === 4)).toBe(
+    true,
+  );
+  expect(preferred.path.some((square) => square.r === 4 && square.c === 0)).toBe(
+    false,
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 4, 1, { id: "rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 0, { id: "death" }),
+  );
+  preferred = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "rook" &&
+      action.mode === "slide" &&
+      action.to.r === 4 &&
+      action.to.c === 9,
+  );
+  expect(preferred.path.some((square) => square.r === 4 && square.c === 0)).toBe(
+    false,
+  );
+});
+
+test("Frame Chess rule defaults survive serialized states missing new flags", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  delete state.ruleOverrides.frameEnabled;
+  delete state.ruleOverrides.wraparoundEnabled;
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 0, 4, { id: "edge-rook" }),
+  );
+  updateIntimidation(state);
+  expect(state.board[0][4].hasShield).toBe(false);
+  expect(state.board[0][4].frameSuppressedShield).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  delete state.ruleOverrides.frameEnabled;
+  delete state.ruleOverrides.wraparoundEnabled;
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 4, 1, { id: "rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 2, { id: "blocker" }),
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "rook" &&
+      action.mode === "slide" &&
+      action.to.r === 4 &&
+      action.to.c === 9 &&
+      action.path.some((square) => square.r === 4 && square.c === 0),
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.FRAME_CHESS,
+  });
+  delete state.ruleOverrides.frameEnabled;
+  delete state.ruleOverrides.wraparoundEnabled;
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 4, 1, { id: "rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 4, 2, { id: "blocker" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 4, 9, {
+      id: "target",
+      hasShield: false,
+    }),
+  );
+  expect(
+    generateLegalActions(state).some(
+      (action) => action.pieceId === "rook" && action.targetId === "target",
+    ),
+  ).toBe(false);
+});
+
+test("Frontal Fan en passant uses orthodox diagonals while Frontal Fan 2 preserves lane recoil", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 7, 4, { id: "white-pawn" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 5, 3, { id: "black-pawn" }),
+  );
+
+  const advance = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "white-pawn" &&
+      action.mode === "pawnAdvance" &&
+      action.to.r === 5 &&
+      action.to.c === 4,
+  );
+  state = applyAction(state, advance);
+  const enPassant = actionMatching(
+    state,
+    (action) => action.mode === "enPassant" && action.pieceId === "black-pawn",
+  );
+  state = applyAction(state, enPassant);
+
+  expect(state.board[5][4]?.id).toBe("white-pawn");
+  expect(state.board[5][4].hasShield).toBe(false);
+  expect(state.board[6][4]?.id).toBe("black-pawn");
+  expect(state.board[6][4].hasShield).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE, {
+    variantId: VARIANT_IDS.TOAD_FOOL,
+    overrides: { pawnBehavior: PAWN_BEHAVIORS.FRONTAL_FAN_2 },
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 7, 4, { id: "white-pawn" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 5, 3, { id: "black-pawn" }),
+  );
+
+  const legacyAdvance = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "white-pawn" &&
+      action.mode === "pawnAdvance" &&
+      action.to.r === 5 &&
+      action.to.c === 4,
+  );
+  state = applyAction(state, legacyAdvance);
+  const legacyEnPassant = actionMatching(
+    state,
+    (action) => action.mode === "enPassant" && action.pieceId === "black-pawn",
+  );
+  state = applyAction(state, legacyEnPassant);
+
+  expect(state.board[5][4]?.id).toBe("white-pawn");
+  expect(state.board[5][4].hasShield).toBe(false);
+  expect(state.board[6][4]?.id).toBe("black-pawn");
+  expect(state.board[6][4].hasShield).toBe(false);
+});
+
+test("deterministic smoke self-play produces legal actions in both variants", () => {
+  for (const variantId of [
+    VARIANT_IDS.CHESS_TWO,
+    VARIANT_IDS.TOAD_FOOL,
+    VARIANT_IDS.TOAD_FOOL_CLASSIC,
+    VARIANT_IDS.FRAME_CHESS,
+  ]) {
+    let state = createGameState({ variantId });
+    for (let ply = 0; ply < 6 && !state.gameOver; ply++) {
+      const action = generateLegalActions(state)[0];
+      expect(action).toBeTruthy();
+      state = applyAction(state, action);
+      expect(state.board).toHaveLength(10);
+    }
+  }
+});
+
+test("AI returns legal actions across all playable variants", () => {
+  for (const variantId of [
+    VARIANT_IDS.CHESS_TWO,
+    VARIANT_IDS.TOAD_FOOL,
+    VARIANT_IDS.TOAD_FOOL_CLASSIC,
+    VARIANT_IDS.FRAME_CHESS,
+  ]) {
+    const state = createGameState({ variantId });
+    const action = chooseAiAction(state, state.currentPlayer, {
+      maxDepth: 1,
+      maxActions: 12,
+      timeLimitMs: 120,
+      hardTimeLimitMs: 180,
+    });
+
+    expect(action).toBeTruthy();
+    expect(
+      generateLegalActions(state).some(
+        (candidate) => candidate.id === action.id,
+      ),
+    ).toBe(true);
+  }
 });
 
 test("pawn multi-advance creates a variant en passant shield attack", () => {
@@ -841,6 +2659,78 @@ test("knights can choose Death-occupied attack staging squares", () => {
   expect(attacks.some((action) => action.deathStaging)).toBe(true);
 });
 
+test("Knight shield-break attacks apply Life and Death pass-through before staging", () => {
+  let state = createEmptyState(COLORS.WHITE);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 2, {
+      id: "life-knight",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.LIFE, COLORS.WHITE, 4, 3, { id: "life" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 3, { id: "target" }),
+  );
+
+  let attack = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightAttack" &&
+      action.targetId === "target" &&
+      action.staging.r === 3 &&
+      action.staging.c === 2,
+  );
+  expect(attack.path.map((square) => `${square.r},${square.c}`)).toEqual([
+    "4,2",
+    "4,3",
+  ]);
+  state = applyAction(state, attack);
+
+  expect(state.board[3][3]?.id).toBe("target");
+  expect(state.board[3][3].hasShield).toBe(false);
+  expect(state.board[3][2]?.id).toBe("life-knight");
+  expect(state.board[3][2].hasShield).toBe(true);
+
+  state = createEmptyState(COLORS.WHITE);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 5, 2, {
+      id: "death-knight",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.DEATH, COLORS.BLACK, 4, 3, { id: "death" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 3, 3, { id: "target" }),
+  );
+
+  attack = actionMatching(
+    state,
+    (action) =>
+      action.mode === "knightAttack" &&
+      action.targetId === "target" &&
+      action.staging.r === 3 &&
+      action.staging.c === 2,
+  );
+  state = applyAction(state, attack);
+
+  expect(state.board[3][3]?.id).toBe("target");
+  expect(state.board[3][3].hasShield).toBe(false);
+  expect(state.board[4][3]?.id).toBe("death");
+  expect(
+    state.board.flat().some((piece) => piece?.id === "death-knight"),
+  ).toBe(false);
+});
+
 test("shieldless Knight killing blows still apply Death pass-through before resting", () => {
   let state = createEmptyState(COLORS.WHITE);
   placePiece(
@@ -1222,8 +3112,7 @@ test("checked players must spend the standard move on a check evasion", () => {
     ),
   ).toBe(true);
   for (const action of actions.filter(
-    (candidate) =>
-      candidate.consumes?.standard && !candidate.consumes?.special,
+    (candidate) => candidate.consumes?.standard && !candidate.consumes?.special,
   )) {
     expect(
       isKingInCheck(
@@ -1313,6 +3202,66 @@ test("checkmate ends immediately even before the mover skips a remaining special
 
   expect(state.gameOver?.winner).toBe(COLORS.WHITE);
   expect(state.gameOver?.reason).toBe("black king checkmated");
+});
+
+test("checkmate-disabled mode allows ordinary play in check and wins by King capture", () => {
+  let state = createEmptyState(COLORS.WHITE, {
+    overrides: { checkmateEnabled: false },
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 5, { id: "white-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 0, { id: "black-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 0, 5, {
+      id: "black-checker",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.WHITE, 8, 0, { id: "white-pawn" }),
+  );
+
+  expect(isKingInCheck(state, COLORS.WHITE)).toBe(false);
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "white-pawn" &&
+      action.mode === "pawnAdvance" &&
+      action.to.r === 7,
+  );
+
+  state = createEmptyState(COLORS.WHITE, {
+    overrides: { checkmateEnabled: false },
+  });
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 5, { id: "white-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.BLACK, 5, 8, { id: "black-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.WHITE, 5, 5, { id: "rook" }),
+  );
+
+  const kingCapture = actionMatching(
+    state,
+    (action) => action.pieceId === "rook" && action.targetId === "black-king",
+  );
+  state = applyAction(state, kingCapture);
+
+  expect(state.gameOver).toEqual({
+    winner: COLORS.WHITE,
+    reason: "black king removed",
+  });
 });
 
 test("ordinary Life/Death moves can prepare the required check evasion", () => {
@@ -1770,6 +3719,60 @@ test("AI takes a loose Queen instead of only threatening it", () => {
   expect(action.pieceId).toBe("bishop");
   expect(action.kind).toBe("attack");
   expect(action.targetId).toBe("queen");
+});
+
+test("AI rejects a non-mating check when the intimidated checker is forced lost", () => {
+  const state = createEmptyState(COLORS.BLACK);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 4, { id: "white-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 9, { id: "black-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 8, 0, {
+      id: "checking-rook",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.QUEEN, COLORS.BLACK, 4, 7, {
+      id: "black-queen",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.QUEEN, COLORS.WHITE, 4, 2, {
+      id: "loose-queen",
+      hasShield: false,
+    }),
+  );
+  updateIntimidation(state);
+
+  const hangingCheck = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "checking-rook" &&
+      action.mode === "slide" &&
+      action.to.r === 8 &&
+      action.to.c === 4,
+  );
+  const afterCheck = applyAction(state, hangingCheck, { recordHistory: false });
+  expect(isKingInCheck(afterCheck, COLORS.WHITE)).toBe(true);
+  expect(afterCheck.board[8][4].isIntimidated).toBe(true);
+  expect(
+    generateLegalActions(afterCheck, COLORS.WHITE, { respectTurn: false }).some(
+      (action) =>
+        action.pieceId === "white-king" && action.targetId === "checking-rook",
+    ),
+  ).toBe(true);
+
+  const action = chooseAiAction(state, COLORS.BLACK, LEVEL_5_AI_OPTIONS);
+  expect(action.pieceId).toBe("black-queen");
+  expect(action.targetId).toBe("loose-queen");
 });
 
 test("AI can answer check by capturing the checking piece", () => {
@@ -2772,6 +4775,139 @@ test("AI preserves quiet retreats for endangered valuable pieces under tight pru
 
   expect(action.pieceId).toBe("queen");
   expect(action.kind).toBe("move");
+});
+
+test("Level 5 AI retreats an endangered Queen instead of taking a loose Bishop", () => {
+  const state = createEmptyState(COLORS.BLACK);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 9, { id: "black-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 9, { id: "white-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.QUEEN, COLORS.BLACK, 5, 5, {
+      id: "black-queen",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 3, 4, {
+      id: "white-knight",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 4, 0, { id: "black-rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.BISHOP, COLORS.WHITE, 4, 8, {
+      id: "white-bishop",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.PAWN, COLORS.BLACK, 1, 1, { id: "quiet-pawn" }),
+  );
+
+  expect(
+    generateLegalActions(state, COLORS.WHITE, { respectTurn: false }).some(
+      (action) => action.targetId === "black-queen",
+    ),
+  ).toBe(true);
+  const looseBishopCapture = actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "black-rook" &&
+      action.kind === "attack" &&
+      action.targetId === "white-bishop",
+  );
+
+  const action = chooseAiAction(state, COLORS.BLACK, LEVEL_5_AI_OPTIONS);
+  expect(action.id).not.toBe(looseBishopCapture.id);
+  expect(action.pieceId).toBe("black-queen");
+  expect(action.kind).toBe("move");
+
+  const after = applyAction(state, action, { recordHistory: false });
+  expect(
+    generateLegalActions(after, COLORS.WHITE, { respectTurn: false }).some(
+      (reply) => reply.targetId === "black-queen",
+    ),
+  ).toBe(false);
+});
+
+test("Level 5 AI captures a Queen attacker instead of taking loose material", () => {
+  const state = createEmptyState(COLORS.BLACK);
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.BLACK, 0, 9, { id: "black-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KING, COLORS.WHITE, 9, 9, { id: "white-king" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.QUEEN, COLORS.BLACK, 5, 5, {
+      id: "black-queen",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.BISHOP, COLORS.BLACK, 2, 3, {
+      id: "black-bishop",
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.KNIGHT, COLORS.WHITE, 3, 4, {
+      id: "white-knight",
+      hasShield: false,
+    }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.ROOK, COLORS.BLACK, 4, 0, { id: "black-rook" }),
+  );
+  placePiece(
+    state.board,
+    createPiece(PIECE_TYPES.BISHOP, COLORS.WHITE, 4, 8, {
+      id: "white-bishop",
+      hasShield: false,
+    }),
+  );
+
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "black-rook" &&
+      action.kind === "attack" &&
+      action.targetId === "white-bishop",
+  );
+  actionMatching(
+    state,
+    (action) =>
+      action.pieceId === "black-bishop" &&
+      action.kind === "attack" &&
+      action.targetId === "white-knight",
+  );
+
+  const action = chooseAiAction(state, COLORS.BLACK, LEVEL_5_AI_OPTIONS);
+  expect(action.pieceId).toBe("black-bishop");
+  expect(action.targetId).toBe("white-knight");
+
+  const after = applyAction(state, action, { recordHistory: false });
+  expect(
+    generateLegalActions(after, COLORS.WHITE, { respectTurn: false }).some(
+      (reply) => reply.targetId === "black-queen",
+    ),
+  ).toBe(false);
 });
 
 test("AI treats Death threats as urgent even against shielded valuable pieces", () => {
